@@ -1,3 +1,4 @@
+import '../models/contact_match.dart';
 import '../models/tool_execution_result.dart';
 import '../services/device_action_service.dart';
 import 'app_registry.dart';
@@ -25,6 +26,9 @@ class ToolExecutor {
 
         case 'call_contact':
           return await _callContact(arguments, onBeforeAction);
+
+        case 'send_message':
+          return await _sendMessage(arguments, onBeforeAction);
 
         default:
           return ToolExecutionResult.error('That action isn\'t available yet.');
@@ -68,6 +72,7 @@ class ToolExecutor {
       return ToolExecutionResult.needsContactSelection(
         'I found ${contacts.length} matches for $name. Choose the one you want to call.',
         contacts,
+        pendingContactTool: 'call_contact',
       );
     }
 
@@ -192,22 +197,25 @@ class ToolExecutor {
       return ToolExecutionResult.error('Tell me which app you want to open.');
     }
 
-    final packageName = AppRegistry.getPackageName(appName);
+    final app = AppRegistry.find(appName);
 
-    if (packageName == null) {
+    if (app == null) {
       return ToolExecutionResult.error(
         'I don\'t know how to open $appName yet.',
       );
     }
 
-    final message = 'Opening $appName.';
+    final message = 'Opening ${app.displayName}.';
 
     if (beforeAction != null) {
       await beforeAction(message);
     }
 
     try {
-      await DeviceActionService.openApp(packageName: packageName);
+      await DeviceActionService.openAppTarget(
+        packageNames: app.packageNames,
+        systemTarget: app.systemTarget,
+      );
     } catch (_) {
       return ToolExecutionResult.error(
         'I couldn\'t open $appName on this phone.',
@@ -215,6 +223,116 @@ class ToolExecutor {
     }
 
     return ToolExecutionResult.completed(message);
+  }
+
+  // ---------------------------------------------
+  // SEND MESSAGE
+  // ---------------------------------------------
+
+  static Future<ToolExecutionResult> _sendMessage(
+    Map<String, dynamic> args,
+    BeforeActionCallback? beforeAction,
+  ) async {
+    final name = args['name']?.toString().trim();
+    final body = args['message']?.toString().trim();
+    final channel = _normalizeMessageChannel(args['channel']?.toString());
+
+    if (name == null || name.isEmpty) {
+      return ToolExecutionResult.error('Tell me who you want to message.');
+    }
+    if (body == null || body.isEmpty) {
+      return ToolExecutionResult.error('Tell me what message to write.');
+    }
+    if (channel == null) {
+      return ToolExecutionResult.error(
+        'Choose WhatsApp or Messages for this message.',
+      );
+    }
+
+    final permission = await DeviceActionService.requestContactsPermission();
+    if (!permission) {
+      return ToolExecutionResult.error(
+        'I need contacts permission before I can prepare that message.',
+      );
+    }
+
+    final contacts = await DeviceActionService.findContacts(query: name);
+    if (contacts.isEmpty) {
+      return ToolExecutionResult.error(
+        'I couldn\'t find $name in your contacts.',
+      );
+    }
+
+    if (contacts.length > 1) {
+      return ToolExecutionResult.needsContactSelection(
+        'I found ${contacts.length} matches for $name. Choose who should receive the message.',
+        contacts,
+        pendingContactTool: 'send_message',
+        pendingContactArguments: <String, dynamic>{
+          'message': body,
+          'channel': channel,
+        },
+      );
+    }
+
+    return composeMessageToContact(
+      contact: contacts.first,
+      messageBody: body,
+      channel: channel,
+      beforeAction: beforeAction,
+    );
+  }
+
+  static Future<ToolExecutionResult> composeMessageToContact({
+    required ContactMatch contact,
+    required String messageBody,
+    required String channel,
+    BeforeActionCallback? beforeAction,
+  }) async {
+    var resolvedChannel = channel;
+    if (channel == 'whatsapp' &&
+        !await DeviceActionService.isWhatsAppAvailable()) {
+      resolvedChannel = 'messages';
+    }
+    final requestedName =
+        resolvedChannel == 'whatsapp' ? 'WhatsApp' : 'Messages';
+    final actionMessage = channel == 'whatsapp' && resolvedChannel == 'messages'
+        ? 'WhatsApp is unavailable, so I\'m opening Messages for ${contact.name} instead.'
+        : 'Opening $requestedName for ${contact.name} with your message ready.';
+
+    if (beforeAction != null) {
+      await beforeAction(actionMessage);
+    }
+
+    try {
+      final actualChannel = await DeviceActionService.composeMessage(
+        phoneNumber: contact.phoneNumber,
+        message: messageBody,
+        channel: resolvedChannel,
+      );
+      if (resolvedChannel == 'whatsapp' && actualChannel == 'messages') {
+        return ToolExecutionResult.completed(
+          'WhatsApp is unavailable, so I opened Messages for ${contact.name} instead.',
+        );
+      }
+      return ToolExecutionResult.completed(actionMessage);
+    } catch (_) {
+      return ToolExecutionResult.error(
+        'I found ${contact.name}, but I couldn\'t open a messaging app.',
+      );
+    }
+  }
+
+  static String? _normalizeMessageChannel(String? raw) {
+    final value = raw?.trim().toLowerCase();
+    if (value == 'whatsapp' || value == 'whats app') return 'whatsapp';
+    if (value == 'messages' ||
+        value == 'message' ||
+        value == 'sms' ||
+        value == 'text') {
+      return 'messages';
+    }
+    return null;
   }
 
   // ---------------------------------------------

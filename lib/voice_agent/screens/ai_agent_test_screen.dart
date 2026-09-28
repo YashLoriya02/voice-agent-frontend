@@ -27,6 +27,10 @@ class _AiAgentTestScreenState extends State<AiAgentTestScreen> {
 
   List<ContactMatch> _contactMatches = [];
 
+  String? _pendingContactTool;
+
+  Map<String, dynamic> _pendingContactArguments = <String, dynamic>{};
+
   Future<void> _execute() async {
     final text = _controller.text.trim();
 
@@ -45,6 +49,10 @@ class _AiAgentTestScreenState extends State<AiAgentTestScreen> {
       _detectedArguments = null;
 
       _contactMatches = [];
+
+      _pendingContactTool = null;
+
+      _pendingContactArguments = <String, dynamic>{};
     });
 
     try {
@@ -109,6 +117,8 @@ class _AiAgentTestScreenState extends State<AiAgentTestScreen> {
 
         if (result.status == ToolExecutionStatus.needsContactSelection) {
           _contactMatches = result.contacts;
+          _pendingContactTool = result.pendingContactTool;
+          _pendingContactArguments = result.pendingContactArguments;
         }
       });
     } catch (e) {
@@ -126,6 +136,24 @@ class _AiAgentTestScreenState extends State<AiAgentTestScreen> {
 
   Future<void> _selectContact(ContactMatch contact) async {
     try {
+      if (_pendingContactTool == 'send_message') {
+        final result = await ToolExecutor.composeMessageToContact(
+          contact: contact,
+          messageBody:
+              _pendingContactArguments['message']?.toString() ?? '',
+          channel: _pendingContactArguments['channel']?.toString() ?? '',
+        );
+
+        if (!mounted) return;
+        setState(() {
+          _contactMatches = [];
+          _pendingContactTool = null;
+          _pendingContactArguments = <String, dynamic>{};
+          _status = result.message;
+        });
+        return;
+      }
+
       await DeviceActionService.dialNumber(phoneNumber: contact.phoneNumber);
 
       if (!mounted) {
@@ -134,6 +162,10 @@ class _AiAgentTestScreenState extends State<AiAgentTestScreen> {
 
       setState(() {
         _contactMatches = [];
+
+        _pendingContactTool = null;
+
+        _pendingContactArguments = <String, dynamic>{};
 
         _status = 'Opening ${contact.name} in the dialer.';
       });

@@ -108,6 +108,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   List<ContactMatch> _contacts = [];
 
+  String? _pendingContactTool;
+
+  Map<String, dynamic> _pendingContactArguments = <String, dynamic>{};
+
   String? _pendingOriginalCommand;
 
   String? _pendingQuestion;
@@ -618,6 +622,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       _agentMessage = null;
 
       _contacts = [];
+
+      _pendingContactTool = null;
+
+      _pendingContactArguments = <String, dynamic>{};
     });
 
     try {
@@ -1100,6 +1108,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
       _contacts = [];
 
+      _pendingContactTool = null;
+
+      _pendingContactArguments = <String, dynamic>{};
+
       /*
        * No spoken intermediate message.
        *
@@ -1306,6 +1318,10 @@ Complete the original request using the answer.
 
           setState(() {
             _contacts = result.contacts;
+
+            _pendingContactTool = result.pendingContactTool;
+
+            _pendingContactArguments = result.pendingContactArguments;
           });
 
           break;
@@ -1340,7 +1356,16 @@ Complete the original request using the answer.
         }
 
         if (_isCustomCommandActive(commandGeneration)) {
-          await _startWakeWordIfIdle();
+          if (_state == VoiceUiState.needsInput &&
+              _pendingOriginalCommand != null) {
+            // Continue a clarification naturally without making the user say
+            // Hey Agent again after questions such as "WhatsApp or Messages?".
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            await _wakeWord.stop();
+            await _toggleCustomGroqMic();
+          } else {
+            await _startWakeWordIfIdle();
+          }
         }
       }
     }
@@ -1482,6 +1507,11 @@ Complete the original request using the answer.
   // ============================================================
 
   Future<void> _selectContact(ContactMatch contact) async {
+    if (_pendingContactTool == 'send_message') {
+      await _selectMessageContact(contact);
+      return;
+    }
+
     await _wakeWord.stop();
 
     final message = 'Opening the dialer for ${contact.name}.';
@@ -1489,6 +1519,10 @@ Complete the original request using the answer.
 
     setState(() {
       _contacts = [];
+
+      _pendingContactTool = null;
+
+      _pendingContactArguments = <String, dynamic>{};
 
       _state = VoiceUiState.speaking;
 
@@ -1537,6 +1571,71 @@ Complete the original request using the answer.
 
       await _showAndSpeak('I couldn\'t open the dialer.', VoiceUiState.error);
     }
+  }
+
+  Future<void> _selectMessageContact(ContactMatch contact) async {
+    final messageBody =
+        _pendingContactArguments['message']?.toString().trim() ?? '';
+    final channel =
+        _pendingContactArguments['channel']?.toString().trim() ?? '';
+
+    if (messageBody.isEmpty || channel.isEmpty) {
+      await _showAndSpeak(
+        'I lost the message details. Please try that request again.',
+        VoiceUiState.error,
+      );
+      return;
+    }
+
+    await _wakeWord.stop();
+    final speechGeneration = ++_speechGeneration;
+
+    setState(() {
+      _contacts = [];
+      _pendingContactTool = null;
+      _pendingContactArguments = <String, dynamic>{};
+    });
+
+    final result = await ToolExecutor.composeMessageToContact(
+      contact: contact,
+      messageBody: messageBody,
+      channel: channel,
+      beforeAction: (message) async {
+        if (!mounted || speechGeneration != _speechGeneration) return;
+        setState(() {
+          _state = VoiceUiState.speaking;
+          _agentMessage = message;
+        });
+
+        try {
+          await _tts.startSpeaking(message);
+        } catch (error) {
+          debugPrint('Message TTS failed: $error');
+        }
+
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        if (!mounted || speechGeneration != _speechGeneration) return;
+        setState(() {
+          _state = VoiceUiState.executing;
+        });
+      },
+    );
+
+    if (!mounted || speechGeneration != _speechGeneration) return;
+
+    if (result.status == ToolExecutionStatus.completed) {
+      setState(() {
+        _state = VoiceUiState.success;
+        _agentMessage = result.message;
+      });
+      HapticFeedback.lightImpact();
+      if (_tts.isSpeaking) await _tts.waitUntilFinished();
+      await _startWakeWordIfIdle();
+      return;
+    }
+
+    await _showAndSpeak(result.message, VoiceUiState.error);
+    await _startWakeWordIfIdle();
   }
 
   // ============================================================

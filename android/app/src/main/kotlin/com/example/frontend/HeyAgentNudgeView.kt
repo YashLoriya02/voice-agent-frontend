@@ -57,7 +57,7 @@ class HeyAgentNudgeView(
                 intArrayOf(
                     Color.rgb(5, 10, 24),
                     Color.rgb(6, 28, 60),
-                    Color.rgb(5, 67, 112),
+                    // Color.rgb(5, 67, 112),
                 ),
             ).apply {
                 cornerRadius = dp(28).toFloat()

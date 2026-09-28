@@ -33,6 +33,34 @@ class DeviceActionService {
     await _channel.invokeMethod('openApp', {'packageName': packageName});
   }
 
+  static Future<void> openAppTarget({
+    required List<String> packageNames,
+    String? systemTarget,
+  }) async {
+    await _channel.invokeMethod<void>('openAppTarget', {
+      'packageNames': packageNames,
+      if (systemTarget != null) 'systemTarget': systemTarget,
+    });
+  }
+
+  /// Opens a pre-filled composer. The user still reviews and taps Send.
+  static Future<String> composeMessage({
+    required String phoneNumber,
+    required String message,
+    required String channel,
+  }) async {
+    return await _channel.invokeMethod<String>('composeMessage', {
+          'phoneNumber': phoneNumber,
+          'message': message,
+          'channel': channel,
+        }) ??
+        'messages';
+  }
+
+  static Future<bool> isWhatsAppAvailable() async {
+    return await _channel.invokeMethod<bool>('isWhatsAppAvailable') ?? false;
+  }
+
   static Future<void> dialNumber({required String phoneNumber}) async {
     await _channel.invokeMethod('dialNumber', {'phoneNumber': phoneNumber});
   }

@@ -106,7 +106,9 @@ class AgentVoiceInteractionSession(context: Context) :
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
+                ).apply {
+                    bottomMargin = dp(10)
+                },
             )
         }
     }

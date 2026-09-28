@@ -14,6 +14,9 @@ import io.flutter.plugin.common.MethodChannel
 import android.Manifest
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
+import android.provider.MediaStore
+import android.telephony.PhoneNumberUtils
+import android.telephony.TelephonyManager
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -183,6 +186,53 @@ class MainActivity : FlutterActivity() {
                                 packageName
                             )
                         }
+                    }
+
+                    "openAppTarget" -> {
+                        val packageNames =
+                            call.argument<List<String>>("packageNames") ?: emptyList()
+                        val systemTarget = call.argument<String>("systemTarget")
+
+                        if (openAppTarget(packageNames, systemTarget)) {
+                            result.success(true)
+                        } else {
+                            result.error(
+                                "APP_NOT_FOUND",
+                                "No compatible application is installed.",
+                                systemTarget,
+                            )
+                        }
+                    }
+
+                    "composeMessage" -> {
+                        val phoneNumber = call.argument<String>("phoneNumber")
+                        val message = call.argument<String>("message")
+                        val channel = call.argument<String>("channel")
+
+                        if (phoneNumber.isNullOrBlank() || message.isNullOrBlank()) {
+                            result.error(
+                                "INVALID_ARGUMENT",
+                                "A phone number and message are required.",
+                                null,
+                            )
+                            return@setMethodCallHandler
+                        }
+
+                        result.success(
+                            composeMessage(
+                                phoneNumber = phoneNumber,
+                                message = message,
+                                preferredChannel = channel ?: "messages",
+                            ),
+                        )
+                    }
+
+                    "isWhatsAppAvailable" -> {
+                        result.success(
+                            listOf("com.whatsapp", "com.whatsapp.w4b").any {
+                                packageManager.getLaunchIntentForPackage(it) != null
+                            },
+                        )
                     }
 
                     "dialNumber" -> {
@@ -423,6 +473,141 @@ class MainActivity : FlutterActivity() {
         startActivity(launchIntent)
 
         return true
+    }
+
+    private fun openAppTarget(
+        packageNames: List<String>,
+        systemTarget: String?,
+    ): Boolean {
+        for (packageName in packageNames.distinct()) {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null && tryStartActivity(launchIntent)) {
+                return true
+            }
+        }
+
+        val fallbackIntents = when (systemTarget) {
+            "messages" -> listOf(
+                Intent(Intent.ACTION_MAIN).addCategory(
+                    "android.intent.category.APP_MESSAGING",
+                ),
+                Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")),
+            )
+
+            "gallery" -> listOf(
+                Intent(Intent.ACTION_MAIN).addCategory(
+                    "android.intent.category.APP_GALLERY",
+                ),
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        "image/*",
+                    )
+                },
+            )
+
+            "settings" -> listOf(Intent(Settings.ACTION_SETTINGS))
+
+            "camera" -> listOf(
+                Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA),
+                Intent(MediaStore.ACTION_IMAGE_CAPTURE),
+            )
+
+            "email" -> listOf(
+                Intent(Intent.ACTION_MAIN).addCategory(
+                    "android.intent.category.APP_EMAIL",
+                ),
+            )
+
+            "maps" -> listOf(
+                Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")),
+            )
+
+            else -> emptyList()
+        }
+
+        return fallbackIntents.any(::tryStartActivity)
+    }
+
+    private fun composeMessage(
+        phoneNumber: String,
+        message: String,
+        preferredChannel: String,
+    ): String {
+        if (
+            preferredChannel.equals("whatsapp", ignoreCase = true) &&
+            openWhatsAppComposer(phoneNumber, message)
+        ) {
+            return "whatsapp"
+        }
+
+        val smsIntent = Intent(
+            Intent.ACTION_SENDTO,
+            Uri.fromParts("smsto", phoneNumber, null),
+        ).apply {
+            putExtra("sms_body", message)
+        }
+
+        if (!tryStartActivity(smsIntent)) {
+            throw ActivityNotFoundException(
+                "No compatible messaging application is installed.",
+            )
+        }
+
+        return "messages"
+    }
+
+    private fun openWhatsAppComposer(
+        phoneNumber: String,
+        message: String,
+    ): Boolean {
+        val normalizedNumber = normalizeForWhatsApp(phoneNumber)
+        if (normalizedNumber.isBlank()) return false
+
+        val uri = Uri.parse("https://wa.me/$normalizedNumber")
+            .buildUpon()
+            .appendQueryParameter("text", message)
+            .build()
+
+        return listOf("com.whatsapp", "com.whatsapp.w4b").any { packageName ->
+            tryStartActivity(
+                Intent(Intent.ACTION_VIEW, uri).setPackage(packageName),
+            )
+        }
+    }
+
+    private fun normalizeForWhatsApp(phoneNumber: String): String {
+        val telephonyManager =
+            getSystemService(android.content.Context.TELEPHONY_SERVICE) as?
+                TelephonyManager
+        val countryCode = sequenceOf(
+            telephonyManager?.simCountryIso,
+            telephonyManager?.networkCountryIso,
+            Locale.getDefault().country,
+        ).firstOrNull { !it.isNullOrBlank() }
+
+        val e164 = if (countryCode.isNullOrBlank()) {
+            null
+        } else {
+            PhoneNumberUtils.formatNumberToE164(
+                phoneNumber,
+                countryCode.uppercase(Locale.US),
+            )
+        }
+
+        return (e164 ?: PhoneNumberUtils.normalizeNumber(phoneNumber))
+            .removePrefix("+")
+    }
+
+    private fun tryStartActivity(intent: Intent): Boolean {
+        return try {
+            startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
     }
 
     private fun dialNumber(

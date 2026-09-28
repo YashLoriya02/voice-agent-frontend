@@ -9,10 +9,16 @@ class ToolExecutionResult {
 
   final List<ContactMatch> contacts;
 
+  final String? pendingContactTool;
+
+  final Map<String, dynamic> pendingContactArguments;
+
   ToolExecutionResult({
     required this.status,
     required this.message,
     this.contacts = const [],
+    this.pendingContactTool,
+    this.pendingContactArguments = const <String, dynamic>{},
   });
 
   factory ToolExecutionResult.completed(String message) {
@@ -31,12 +37,17 @@ class ToolExecutionResult {
 
   factory ToolExecutionResult.needsContactSelection(
     String message,
-    List<ContactMatch> contacts,
-  ) {
+    List<ContactMatch> contacts, {
+    String? pendingContactTool,
+    Map<String, dynamic> pendingContactArguments =
+        const <String, dynamic>{},
+  }) {
     return ToolExecutionResult(
       status: ToolExecutionStatus.needsContactSelection,
       message: message,
       contacts: contacts,
+      pendingContactTool: pendingContactTool,
+      pendingContactArguments: pendingContactArguments,
     );
   }
 }

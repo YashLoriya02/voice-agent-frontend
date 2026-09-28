@@ -370,6 +370,30 @@ class DeepgramVoiceAgentService {
           'defer_until_eot': true,
         },
         <String, dynamic>{
+          'name': 'send_message',
+          'description':
+              'Prepare a WhatsApp or Android Messages message for a saved phone contact. The user reviews and taps Send. If the user did not specify WhatsApp or Messages, ask them before calling this function.',
+          'parameters': <String, dynamic>{
+            'type': 'object',
+            'properties': <String, dynamic>{
+              'name': <String, dynamic>{
+                'type': 'string',
+                'description': 'The saved contact name.',
+              },
+              'message': <String, dynamic>{
+                'type': 'string',
+                'description': 'Exact message text requested by the user.',
+              },
+              'channel': <String, dynamic>{
+                'type': 'string',
+                'enum': <String>['whatsapp', 'messages'],
+              },
+            },
+            'required': <String>['name', 'message', 'channel'],
+          },
+          'defer_until_eot': true,
+        },
+        <String, dynamic>{
           'name': 'set_timer',
           'description':
               'Start a countdown timer on the user\'s Android phone.',
@@ -1194,11 +1218,13 @@ VOICE STYLE:
 - Ask one short clarification question when essential information is missing.
 
 DEVICE ACTIONS:
-You have client-side functions for calling contacts, setting alarms, starting timers, and opening apps.
+You have client-side functions for calling contacts, preparing messages, setting alarms, starting timers, and opening apps.
 Use those functions whenever the user asks for the matching phone action.
 Never claim a device action succeeded until the function result says it succeeded.
 If a function returns an error, explain it briefly.
 If it returns multiple contact matches, ask the user which contact they mean.
+For messaging, preserve the exact requested message text. If the user did not specify WhatsApp or Messages, ask which one they want before calling send_message. Never claim the message was sent; say the composer is ready because the user must tap Send.
+open_app supports YouTube, Spotify, WhatsApp, Chrome, Instagram, PUBG or BGMI, Zomato, Swiggy, Zepto, Blinkit, Messages, Gallery or Photos, Settings, Camera, Gmail or Email, Maps, Groww, and Bajaj Broking.
 
 GENERAL ASSISTANCE:
 Answer general knowledge questions, definitions, jokes, casual conversation, explanations, and everyday requests directly.
