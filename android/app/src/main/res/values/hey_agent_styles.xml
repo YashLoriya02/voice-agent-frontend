@@ -8,4 +8,14 @@
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:colorAccent">#35E0D5</item>
     </style>
+
+    <style name="Theme.HeyAgent.TransparentHost" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:colorAccent">#35E0D5</item>
+    </style>
 </resources>

@@ -11,6 +11,10 @@ class AppDefinition {
 }
 
 class AppRegistry {
+  static const AppDefinition _aiAgent = AppDefinition(
+    displayName: 'AI Agent',
+    systemTarget: 'agent',
+  );
   static const AppDefinition _youtube = AppDefinition(
     displayName: 'YouTube',
     packageNames: <String>['com.google.android.youtube'],
@@ -100,6 +104,10 @@ class AppRegistry {
   );
 
   static const Map<String, AppDefinition> _apps = <String, AppDefinition>{
+    'ai agent': _aiAgent,
+    'ai voice agent': _aiAgent,
+    'voice agent': _aiAgent,
+    'agent': _aiAgent,
     'youtube': _youtube,
     'spotify': _spotify,
     'whatsapp': _whatsApp,

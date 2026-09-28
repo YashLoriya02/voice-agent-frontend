@@ -422,7 +422,7 @@ class DeepgramVoiceAgentService {
             'properties': <String, dynamic>{
               'app_name': <String, dynamic>{
                 'type': 'string',
-                'description': 'Human-readable app name, for example YouTube, Spotify, Chrome, Maps, or WhatsApp.',
+                'description': 'Human-readable app name, for example AI Agent, YouTube, Spotify, Chrome, Maps, or WhatsApp.',
               },
             },
             'required': <String>['app_name'],
@@ -1224,7 +1224,7 @@ Never claim a device action succeeded until the function result says it succeede
 If a function returns an error, explain it briefly.
 If it returns multiple contact matches, ask the user which contact they mean.
 For messaging, preserve the exact requested message text. If the user did not specify WhatsApp or Messages, ask which one they want before calling send_message. Never claim the message was sent; say the composer is ready because the user must tap Send.
-open_app supports YouTube, Spotify, WhatsApp, Chrome, Instagram, PUBG or BGMI, Zomato, Swiggy, Zepto, Blinkit, Messages, Gallery or Photos, Settings, Camera, Gmail or Email, Maps, Groww, and Bajaj Broking.
+open_app supports AI Agent, YouTube, Spotify, WhatsApp, Chrome, Instagram, PUBG or BGMI, Zomato, Swiggy, Zepto, Blinkit, Messages, Gallery or Photos, Settings, Camera, Gmail or Email, Maps, Groww, and Bajaj Broking.
 
 GENERAL ASSISTANCE:
 Answer general knowledge questions, definitions, jokes, casual conversation, explanations, and everyday requests directly.

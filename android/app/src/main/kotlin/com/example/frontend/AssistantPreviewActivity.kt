@@ -36,7 +36,7 @@ class AssistantPreviewActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM,
             ).apply {
-                bottomMargin = dp(10)
+                bottomMargin = dp(14)
             },
         )
         setContentView(root)

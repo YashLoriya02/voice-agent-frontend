@@ -79,7 +79,7 @@
             android:launchMode="singleTop"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:taskAffinity=""
+            android:taskAffinity="${applicationId}.assistant"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -103,6 +103,24 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:theme="@style/Theme.HeyAgent.Preview" />
+
+        <!-- Invisible Flutter host for wake-word conversations. The native
+             VoiceInteractionSession nudge remains the only visible UI. -->
+        <activity
+            android:name=".AssistantHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.HeyAgent.TransparentHost"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/Theme.HeyAgent.TransparentHost" />
+        </activity>
 
         <!-- The user-selected Android Digital Assistant. The system keeps this
              service available so Vosk can hear "Hey Agent" without Flutter UI. -->

@@ -24,6 +24,14 @@ class AgentVoiceInteractionSession(context: Context) :
         private const val GREETING = "Hey, how may I help you?"
         private const val POST_GREETING_DELAY_MS = 900L
         private const val TTS_FALLBACK_TIMEOUT_MS = 6_000L
+
+        @Volatile
+        private var activeSession: AgentVoiceInteractionSession? = null
+
+        fun dismissActiveSession() {
+            val session = activeSession ?: return
+            session.mainHandler.post { session.hide() }
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -36,6 +44,7 @@ class AgentVoiceInteractionSession(context: Context) :
 
     override fun onCreate() {
         super.onCreate()
+        activeSession = this
         textToSpeech = TextToSpeech(sessionContext) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) {
@@ -69,7 +78,7 @@ class AgentVoiceInteractionSession(context: Context) :
                                     status = "SECURE HANDOFF IN PROGRESS",
                                 )
                                 mainHandler.postDelayed(
-                                    { launchFlutterAgent() },
+                                    { startBackgroundFlutterAgent() },
                                     POST_GREETING_DELAY_MS,
                                 )
                             }
@@ -77,11 +86,11 @@ class AgentVoiceInteractionSession(context: Context) :
 
                         @Deprecated("Deprecated by Android")
                         override fun onError(utteranceId: String?) {
-                            mainHandler.post { launchFlutterAgent() }
+                            mainHandler.post { startBackgroundFlutterAgent() }
                         }
 
                         override fun onError(utteranceId: String?, errorCode: Int) {
-                            mainHandler.post { launchFlutterAgent() }
+                            mainHandler.post { startBackgroundFlutterAgent() }
                         }
                     },
                 )
@@ -107,7 +116,7 @@ class AgentVoiceInteractionSession(context: Context) :
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply {
-                    bottomMargin = dp(10)
+                    bottomMargin = dp(14)
                 },
             )
         }
@@ -121,13 +130,14 @@ class AgentVoiceInteractionSession(context: Context) :
         // Never leave the assistant card stuck if a device TTS engine fails to
         // initialize or omits its completion callback.
         mainHandler.postDelayed(
-            { if (!launched) launchFlutterAgent() },
+            { if (!launched) startBackgroundFlutterAgent() },
             TTS_FALLBACK_TIMEOUT_MS,
         )
     }
 
     override fun onHide() {
         textToSpeech?.stop()
+        AssistantHostActivity.finishActive()
         super.onHide()
     }
 
@@ -136,13 +146,14 @@ class AgentVoiceInteractionSession(context: Context) :
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null
+        if (activeSession === this) activeSession = null
         super.onDestroy()
     }
 
     private fun speakGreeting() {
         if (!greetingPending) return
         if (!ttsReady) {
-            if (textToSpeech == null) launchFlutterAgent()
+            if (textToSpeech == null) startBackgroundFlutterAgent()
             return
         }
 
@@ -156,16 +167,16 @@ class AgentVoiceInteractionSession(context: Context) :
         )
 
         if (result == TextToSpeech.ERROR) {
-            launchFlutterAgent()
+            startBackgroundFlutterAgent()
         }
     }
 
-    private fun launchFlutterAgent() {
+    private fun startBackgroundFlutterAgent() {
         if (launched) return
         launched = true
         AssistantActivationStore.markPending()
 
-        val intent = Intent(sessionContext, MainActivity::class.java).apply {
+        val intent = Intent(sessionContext, AssistantHostActivity::class.java).apply {
             putExtra(AgentVoiceInteractionService.EXTRA_WAKE_ACTIVATION, true)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -175,11 +186,13 @@ class AgentVoiceInteractionSession(context: Context) :
         }
 
         try {
-            startAssistantActivity(intent)
+            // A voice activity is placed underneath this session, so the
+            // native nudge remains visible while Flutter runs the mic,
+            // provider, tools and TTS invisibly.
+            startVoiceActivity(intent)
         } catch (_: Exception) {
             sessionContext.startActivity(intent)
         }
-        hide()
     }
 
     private fun dp(value: Int): Int {

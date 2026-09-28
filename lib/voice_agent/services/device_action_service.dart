@@ -43,6 +43,10 @@ class DeviceActionService {
     });
   }
 
+  static Future<void> openAgentApp() async {
+    await _channel.invokeMethod<void>('openAgentApp');
+  }
+
   /// Opens a pre-filled composer. The user still reviews and taps Send.
   static Future<String> composeMessage({
     required String phoneNumber,

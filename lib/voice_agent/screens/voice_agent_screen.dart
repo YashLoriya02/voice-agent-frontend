@@ -24,11 +24,11 @@ enum _ProviderVoiceActionType { current, switchProvider }
 
 class _ProviderVoiceAction {
   const _ProviderVoiceAction.current()
-      : type = _ProviderVoiceActionType.current,
-        target = null;
+    : type = _ProviderVoiceActionType.current,
+      target = null;
 
   const _ProviderVoiceAction.switchProvider([this.target])
-      : type = _ProviderVoiceActionType.switchProvider;
+    : type = _ProviderVoiceActionType.switchProvider;
 
   final _ProviderVoiceActionType type;
   final AgentProvider? target;
@@ -46,7 +46,11 @@ enum VoiceUiState {
 }
 
 class VoiceAgentScreen extends StatefulWidget {
-  const VoiceAgentScreen({super.key});
+  const VoiceAgentScreen({super.key, this.backgroundAssistant = false});
+
+  /// Runs the normal voice engine without drawing the full Flutter screen.
+  /// Android's native VoiceInteractionSession remains the only visible UI.
+  final bool backgroundAssistant;
 
   @override
   State<VoiceAgentScreen> createState() => _VoiceAgentScreenState();
@@ -190,7 +194,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     _animation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
-    )..repeat();
+    );
+    if (!widget.backgroundAssistant) {
+      _animation.repeat();
+    }
 
     _transcriptSub = _deepgram.transcriptStream.listen((value) {
       if (!mounted || _provider != AgentProvider.customGroq) return;
@@ -242,7 +249,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       if (_wakeWord.isSystemAssistant) {
         unawaited(
           _wakeWord.handoffToBackground(
-            canListen: _wakeWordEnabled &&
+            canListen:
+                _wakeWordEnabled &&
                 !_voiceEngineBusy &&
                 _wakeWordState != WakeWordState.detected,
           ),
@@ -323,15 +331,22 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     }
 
     if (transcript.isUser) {
+      if (_isOpenAgentAppCommand(transcript.content)) {
+        setState(() {
+          _transcript = transcript.content;
+          _agentMessage = null;
+        });
+        unawaited(_openVisibleAgentApp());
+        return;
+      }
+
       final voiceAction = _parseProviderVoiceAction(transcript.content);
       if (voiceAction != null) {
         setState(() {
           _transcript = transcript.content;
           _agentMessage = null;
         });
-        unawaited(
-          _executeProviderVoiceAction(transcript.content, voiceAction),
-        );
+        unawaited(_executeProviderVoiceAction(transcript.content, voiceAction));
         return;
       }
     }
@@ -823,26 +838,27 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   Widget _wakeWordControl() {
     final listening = _wakeWordState == WakeWordState.listening;
-    final setupRequired = _wakeWordState == WakeWordState.unavailable ||
+    final setupRequired =
+        _wakeWordState == WakeWordState.unavailable ||
         _wakeWordState == WakeWordState.error;
 
     final title = !_wakeWordEnabled
         ? 'HEY AGENT OFF'
         : _wakeWord.isSystemAssistant
-            ? 'HEY AGENT • SYSTEM READY'
+        ? 'HEY AGENT • SYSTEM READY'
         : setupRequired
-            ? 'HEY AGENT • SETUP REQUIRED'
-            : listening
-                ? 'HEY AGENT • LISTENING'
-                : _wakeWordState == WakeWordState.detected
-                    ? 'HEY AGENT • DETECTED'
-                    : 'HEY AGENT • PAUSED';
+        ? 'HEY AGENT • SETUP REQUIRED'
+        : listening
+        ? 'HEY AGENT • LISTENING'
+        : _wakeWordState == WakeWordState.detected
+        ? 'HEY AGENT • DETECTED'
+        : 'HEY AGENT • PAUSED';
 
     final accent = setupRequired
         ? const Color(0xFFFFAD42)
         : listening
-            ? const Color(0xFF53E6B1)
-            : const Color(0xFF65A9FF);
+        ? const Color(0xFF53E6B1)
+        : const Color(0xFF65A9FF);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(22, 10, 22, 0),
@@ -867,9 +883,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
                 Text(
                   title,
                   style: TextStyle(
-                    color: _wakeWordEnabled
-                        ? accent
-                        : const Color(0xFF70819B),
+                    color: _wakeWordEnabled ? accent : const Color(0xFF70819B),
                     fontSize: 9,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.1,
@@ -1090,6 +1104,11 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     final command = raw.trim();
 
     if (command.isEmpty || _processing) {
+      return;
+    }
+
+    if (_isOpenAgentAppCommand(command)) {
+      await _openVisibleAgentApp();
       return;
     }
 
@@ -1363,6 +1382,15 @@ Complete the original request using the answer.
             await Future<void>.delayed(const Duration(milliseconds: 250));
             await _wakeWord.stop();
             await _toggleCustomGroqMic();
+          } else if (widget.backgroundAssistant &&
+              _provider == AgentProvider.customGroq) {
+            // The native nudge remains open after a Groq response. Start a
+            // fresh one-turn STT session directly instead of returning to
+            // Vosk, because the transparent host can be lifecycle-inactive
+            // underneath Android's VoiceInteractionSession.
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            await _wakeWord.stop();
+            await _toggleCustomGroqMic();
           } else {
             await _startWakeWordIfIdle();
           }
@@ -1377,6 +1405,54 @@ Complete the original request using the answer.
         generation == _customCommandGeneration;
   }
 
+  bool _isOpenAgentAppCommand(String raw) {
+    final normalized = raw
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9 ]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    final asksToOpen = RegExp(r'\b(open|launch|show|start)\b')
+        .hasMatch(normalized);
+    final namesThisApp =
+        normalized.contains('ai agent') ||
+        normalized.contains('agent app') ||
+        normalized.contains('voice agent app') ||
+        normalized.contains('your app') ||
+        normalized.contains('our agent app');
+
+    return asksToOpen && namesThisApp;
+  }
+
+  Future<void> _openVisibleAgentApp() async {
+    if (_voiceControlInProgress) return;
+    _voiceControlInProgress = true;
+
+    try {
+      await _wakeWord.stop();
+      await _tts.stop();
+
+      if (_provider == AgentProvider.customGroq) {
+        await _deepgram.cancelListening();
+        VoiceAgentApiService.cancelActiveRequest();
+      } else {
+        _deepgramSpeechFallbackTimer?.cancel();
+        _deepgramResponseGeneration++;
+        await _deepgramVoiceAgent.disconnect();
+      }
+
+      await DeviceActionService.openAgentApp();
+    } catch (error) {
+      debugPrint('Unable to open the visible AI Agent app: $error');
+      _voiceControlInProgress = false;
+      await _showAndSpeak(
+        'I couldn\'t open the AI Agent app.',
+        VoiceUiState.error,
+      );
+      await _startWakeWordIfIdle();
+    }
+  }
+
   _ProviderVoiceAction? _parseProviderVoiceAction(String raw) {
     final normalized = raw
         .toLowerCase()
@@ -1387,26 +1463,27 @@ Complete the original request using the answer.
     if (normalized.isEmpty) return null;
 
     final mentionsDeepgram = RegExp(r'\bdeep ?gram\b').hasMatch(normalized);
-    final mentionsGroq = RegExp(r'\bgroq\b').hasMatch(normalized) ||
+    final mentionsGroq =
+        RegExp(r'\bgroq\b').hasMatch(normalized) ||
         normalized.contains('custom model') ||
         normalized.contains('custom provider');
     final asksCurrent =
         RegExp(r'\b(current|active) (model|provider)\b').hasMatch(normalized) ||
-            RegExp(r'\b(what|which) (model|provider)\b').hasMatch(normalized) ||
-            normalized.contains('model are you using') ||
-            normalized.contains('provider are you using');
+        RegExp(r'\b(what|which) (model|provider)\b').hasMatch(normalized) ||
+        normalized.contains('model are you using') ||
+        normalized.contains('provider are you using');
     final hasDirectSwitchVerb =
-        RegExp(r'\b(switch|change|swap|select|choose)\b').hasMatch(normalized) ||
-            RegExp(r'\b(go|move) to\b').hasMatch(normalized);
-    final hasUseRequest = RegExp(
-      r'^(please )?((can|could|would) you )?use\b',
-    ).hasMatch(normalized);
+        RegExp(r'\b(switch|change|swap|select|choose)\b')
+            .hasMatch(normalized) ||
+        RegExp(r'\b(go|move) to\b').hasMatch(normalized);
+    final hasUseRequest = RegExp(r'^(please )?((can|could|would) you )?use\b')
+        .hasMatch(normalized);
     final hasSwitchVerb = hasDirectSwitchVerb || hasUseRequest;
     final mentionsProvider =
         RegExp(r'\b(model|provider|engine)\b').hasMatch(normalized) ||
-            mentionsDeepgram ||
-            mentionsGroq ||
-            normalized.contains('other one');
+        mentionsDeepgram ||
+        mentionsGroq ||
+        normalized.contains('other one');
 
     if (asksCurrent && !hasDirectSwitchVerb) {
       return const _ProviderVoiceAction.current();
@@ -1465,7 +1542,8 @@ Complete the original request using the answer.
 
       final message = switch (action.type) {
         _ProviderVoiceActionType.current => _currentProviderMessage(),
-        _ProviderVoiceActionType.switchProvider when target == previousProvider =>
+        _ProviderVoiceActionType.switchProvider
+            when target == previousProvider =>
           'You are already using ${_providerName(previousProvider)}.',
         _ProviderVoiceActionType.switchProvider =>
           'Switched from ${_providerName(previousProvider)} to ${_providerName(target!)}.',
@@ -1756,6 +1834,10 @@ Complete the original request using the answer.
 
   @override
   Widget build(BuildContext context) {
+    if (widget.backgroundAssistant) {
+      return const SizedBox.expand();
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF02050A),
 
@@ -2340,21 +2422,21 @@ Complete the original request using the answer.
     final showStop = isDeepgram
         ? _deepgramAgentCanStop
         : _state == VoiceUiState.listening ||
-            _state == VoiceUiState.thinking ||
-            _state == VoiceUiState.speaking ||
-            _processing;
+              _state == VoiceUiState.thinking ||
+              _state == VoiceUiState.speaking ||
+              _processing;
 
     final disabled = _switchingProvider || _state == VoiceUiState.executing;
 
     final helperText = showStop
         ? (isDeepgram
-            ? 'Stop voice session'
-            : (_state == VoiceUiState.listening
-                ? 'Tap to finish'
-                : 'Stop response'))
+              ? 'Stop voice session'
+              : (_state == VoiceUiState.listening
+                    ? 'Tap to finish'
+                    : 'Stop response'))
         : (_state == VoiceUiState.needsInput
-            ? 'Tap to answer'
-            : 'Tap to speak');
+              ? 'Tap to answer'
+              : 'Tap to speak');
 
     return Container(
       padding: const EdgeInsets.fromLTRB(22, 10, 22, 24),
@@ -2362,10 +2444,7 @@ Complete the original request using the answer.
         children: [
           Text(
             helperText,
-            style: const TextStyle(
-              color: Color(0xFF536785),
-              fontSize: 12,
-            ),
+            style: const TextStyle(color: Color(0xFF536785), fontSize: 12),
           ),
           const SizedBox(height: 12),
           GestureDetector(

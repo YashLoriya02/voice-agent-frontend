@@ -23,7 +23,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
-class MainActivity : FlutterActivity() {
+open class MainActivity : FlutterActivity() {
 
     companion object {
         private const val TAG = "HeyAgent/MainActivity"
@@ -202,6 +202,11 @@ class MainActivity : FlutterActivity() {
                                 systemTarget,
                             )
                         }
+                    }
+
+                    "openAgentApp" -> {
+                        openVisibleAgentApp()
+                        result.success(true)
                     }
 
                     "composeMessage" -> {
@@ -479,6 +484,11 @@ class MainActivity : FlutterActivity() {
         packageNames: List<String>,
         systemTarget: String?,
     ): Boolean {
+        if (systemTarget == "agent") {
+            openVisibleAgentApp()
+            return true
+        }
+
         for (packageName in packageNames.distinct()) {
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             if (launchIntent != null && tryStartActivity(launchIntent)) {
@@ -527,6 +537,23 @@ class MainActivity : FlutterActivity() {
         }
 
         return fallbackIntents.any(::tryStartActivity)
+    }
+
+    private fun openVisibleAgentApp() {
+        AgentVoiceInteractionSession.dismissActiveSession()
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            )
+        }
+
+        startActivity(intent)
+
+        if (this is AssistantHostActivity) {
+            finish()
+        }
     }
 
     private fun composeMessage(
