@@ -1,7 +1,7 @@
 package com.example.frontend
 
 import android.Manifest
-import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
@@ -18,16 +18,19 @@ import org.vosk.android.StorageService
 import java.util.Locale
 
 /**
- * Foreground-only, account-free wake phrase listener.
+ * Account-free, on-device wake phrase listener shared by the Flutter activity
+ * and Android's selected VoiceInteractionService.
  *
  * The recognizer has a restricted grammar so it only needs to distinguish the
  * wake phrase from unknown speech. It shuts down AudioRecord before notifying
  * Flutter of a detection; this is essential for the Groq/Deepgram handoff.
  */
 class VoskWakeWordManager(
-    private val activity: Activity,
+    context: Context,
     private val emit: (String, Map<String, Any?>) -> Unit,
 ) : RecognitionListener {
+
+    private val context = context.applicationContext
 
     companion object {
         private const val TAG = "WakeWord/Vosk"
@@ -70,7 +73,7 @@ class VoskWakeWordManager(
         Log.i(TAG, "Unpacking bundled Vosk model '$MODEL_ASSET'.")
 
         StorageService.unpack(
-            activity,
+            context,
             MODEL_ASSET,
             MODEL_TARGET,
             { loadedModel ->
@@ -130,7 +133,7 @@ class VoskWakeWordManager(
 
         if (
             ContextCompat.checkSelfPermission(
-                activity,
+                context,
                 Manifest.permission.RECORD_AUDIO,
             ) != PackageManager.PERMISSION_GRANTED
         ) {

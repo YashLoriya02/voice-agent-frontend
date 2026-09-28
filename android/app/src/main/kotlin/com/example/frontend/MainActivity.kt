@@ -2,31 +2,74 @@ package com.example.frontend
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.app.role.RoleManager
+import android.os.Build
+import android.os.Bundle
 import android.net.Uri
 import android.provider.AlarmClock
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import android.Manifest
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
+import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
 class MainActivity : FlutterActivity() {
 
+    companion object {
+        private const val TAG = "HeyAgent/MainActivity"
+    }
+
     private val CHANNEL = "com.infiheal.voice_agent/actions"
     private val WAKE_WORD_CHANNEL = "com.infiheal.voice_agent/wake_word"
 
     private val CONTACTS_PERMISSION_REQUEST_CODE = 1001
     private val MICROPHONE_PERMISSION_REQUEST_CODE = 1002
+    private val ASSISTANT_ROLE_REQUEST_CODE = 1003
 
     private var pendingContactsPermissionResult:
         MethodChannel.Result? = null
 
+    private var pendingAssistantRoleResult:
+        MethodChannel.Result? = null
+
     private var wakeWordChannel: MethodChannel? = null
-    private var wakeWordManager: VoskWakeWordManager? = null
+
+    private val wakeWordListener: (String, Map<String, Any?>) -> Unit =
+        { method, arguments ->
+            // The selected VoiceInteractionService owns the wake experience.
+            // It speaks first and later sends a separate activation to Flutter.
+            val handledBySystemAssistant =
+                method == "detected" &&
+                    AgentVoiceInteractionService.isSelected(this)
+
+            if (!handledBySystemAssistant) {
+                runOnUiThread {
+                    val channel = wakeWordChannel
+                    if (channel != null && !isFinishing && !isDestroyed) {
+                        channel.invokeMethod(method, arguments)
+                    }
+                }
+            }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        captureAssistantActivation(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureAssistantActivation(intent)
+        dispatchPendingAssistantActivation()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -200,20 +243,14 @@ class MainActivity : FlutterActivity() {
         )
 
         wakeWordChannel = channel
-        wakeWordManager?.dispose()
-        wakeWordManager = VoskWakeWordManager(this) { method, arguments ->
-            runOnUiThread {
-                if (!isFinishing && !isDestroyed) {
-                    channel.invokeMethod(method, arguments)
-                }
-            }
-        }
+        WakeWordRuntime.removeListener(wakeWordListener)
+        WakeWordRuntime.addListener(wakeWordListener)
 
         channel.setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
                     "initialize" -> {
-                        wakeWordManager?.initialize()
+                        WakeWordRuntime.initialize(this)
                         result.success(true)
                     }
 
@@ -223,7 +260,68 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "stop" -> {
-                        wakeWordManager?.stop()
+                        WakeWordRuntime.stop()
+                        result.success(true)
+                    }
+
+                    "setEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        AssistantPreferences.setWakeEnabled(this, enabled)
+                        if (enabled) {
+                            startWakeWordWithPermission()
+                        } else {
+                            WakeWordRuntime.stop()
+                        }
+                        result.success(true)
+                    }
+
+                    "assistantStatus" -> {
+                        result.success(
+                            mapOf(
+                                "selected" to isAssistantRoleHeld(),
+                                "wakeEnabled" to AssistantPreferences.isWakeEnabled(this),
+                            ),
+                        )
+                    }
+
+                    "getPreferredProvider" -> {
+                        result.success(AssistantPreferences.preferredProvider(this))
+                    }
+
+                    "setPreferredProvider" -> {
+                        val provider =
+                            call.argument<String>("provider") ?: "customGroq"
+                        AssistantPreferences.setPreferredProvider(this, provider)
+                        result.success(true)
+                    }
+
+                    "requestAssistantRole" -> {
+                        requestAssistantRole(result)
+                    }
+
+                    "previewAssistantUi" -> {
+                        startActivity(
+                            Intent(this, AssistantPreviewActivity::class.java),
+                        )
+                        result.success(true)
+                    }
+
+                    "consumePendingActivation" -> {
+                        result.success(AssistantActivationStore.consume())
+                    }
+
+                    "backgroundHandoff" -> {
+                        val canListen = call.argument<Boolean>("canListen") ?: false
+                        if (
+                            canListen &&
+                            isAssistantRoleHeld() &&
+                            AssistantPreferences.isWakeEnabled(this)
+                        ) {
+                            AgentVoiceInteractionService.startSelectedListener(this)
+                            WakeWordRuntime.start(this)
+                        } else if (!canListen) {
+                            WakeWordRuntime.stop()
+                        }
                         result.success(true)
                     }
 
@@ -231,7 +329,14 @@ class MainActivity : FlutterActivity() {
                     // A later visit to the voice screen can therefore restart
                     // wake listening immediately.
                     "dispose" -> {
-                        wakeWordManager?.stop()
+                        if (
+                            isAssistantRoleHeld() &&
+                            AssistantPreferences.isWakeEnabled(this)
+                        ) {
+                            AgentVoiceInteractionService.startSelectedListener(this)
+                        } else {
+                            WakeWordRuntime.stop()
+                        }
                         result.success(true)
                     }
 
@@ -254,7 +359,7 @@ class MainActivity : FlutterActivity() {
                 Manifest.permission.RECORD_AUDIO,
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            wakeWordManager?.start()
+            WakeWordRuntime.start(this)
             return
         }
 
@@ -397,8 +502,133 @@ override fun onRequestPermissionsResult(
             grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
 
-        wakeWordManager?.onMicrophonePermissionResult(granted)
+        WakeWordRuntime.onMicrophonePermissionResult(this, granted)
     }
+}
+
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+
+    if (requestCode == ASSISTANT_ROLE_REQUEST_CODE) {
+        val selected = isAssistantRoleHeld()
+        pendingAssistantRoleResult?.success(selected)
+        pendingAssistantRoleResult = null
+
+        if (selected && AssistantPreferences.isWakeEnabled(this)) {
+            startWakeWordWithPermission()
+        }
+    }
+}
+
+private fun isAssistantRoleHeld(): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (
+            roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
+            roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+        ) {
+            return true
+        }
+    }
+
+    return AgentVoiceInteractionService.isSelected(this)
+}
+
+private fun requestAssistantRole(result: MethodChannel.Result) {
+    Log.i(TAG, "Assistant role requested from Flutter.")
+
+    if (isAssistantRoleHeld()) {
+        Toast.makeText(this, "AI Voice Agent is already the default assistant.", Toast.LENGTH_SHORT).show()
+        result.success(true)
+        return
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+            try {
+                val roleIntent =
+                    roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
+
+                if (roleIntent.resolveActivity(packageManager) != null) {
+                    pendingAssistantRoleResult?.error(
+                        "REQUEST_REPLACED",
+                        "A newer assistant-role request replaced this request.",
+                        null,
+                    )
+                    pendingAssistantRoleResult = result
+                    Toast.makeText(
+                        this,
+                        "Choose AI Voice Agent as the default assistant.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    startActivityForResult(
+                        roleIntent,
+                        ASSISTANT_ROLE_REQUEST_CODE,
+                    )
+                    return
+                }
+
+                Log.w(TAG, "Assistant role intent has no matching system activity.")
+            } catch (exception: Exception) {
+                Log.w(TAG, "Assistant role dialog failed; opening Settings.", exception)
+            }
+        } else {
+            Log.w(TAG, "ROLE_ASSISTANT is unavailable; opening Settings.")
+        }
+    }
+
+    openAssistantSettings(result)
+}
+
+private fun openAssistantSettings(result: MethodChannel.Result) {
+    val candidates = listOf(
+        Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+        Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+    )
+
+    val settingsIntent = candidates.firstOrNull {
+        it.resolveActivity(packageManager) != null
+    }
+
+    if (settingsIntent == null) {
+        result.error(
+            "ASSISTANT_SETTINGS_UNAVAILABLE",
+            "Android could not open Default Assistant settings.",
+            null,
+        )
+        return
+    }
+
+    Toast.makeText(
+        this,
+        "Open Digital assistant app and select AI Voice Agent.",
+        Toast.LENGTH_LONG,
+    ).show()
+    startActivity(settingsIntent)
+    result.success(false)
+}
+
+private fun captureAssistantActivation(intent: Intent?) {
+    if (
+        intent?.getBooleanExtra(
+            AgentVoiceInteractionService.EXTRA_WAKE_ACTIVATION,
+            false,
+        ) == true
+    ) {
+        AssistantActivationStore.markPending()
+        intent.removeExtra(AgentVoiceInteractionService.EXTRA_WAKE_ACTIVATION)
+    }
+}
+
+private fun dispatchPendingAssistantActivation() {
+    if (wakeWordChannel == null) return
+    if (!AssistantActivationStore.consume()) return
+    wakeWordChannel?.invokeMethod(
+        "activation",
+        mapOf("source" to "system_assistant"),
+    )
 }
 
 private fun findContacts(
@@ -652,8 +882,16 @@ private fun normalizePhoneNumber(
 override fun onDestroy() {
     wakeWordChannel?.setMethodCallHandler(null)
     wakeWordChannel = null
-    wakeWordManager?.dispose()
-    wakeWordManager = null
+    WakeWordRuntime.removeListener(wakeWordListener)
+
+    if (
+        isAssistantRoleHeld() &&
+        AssistantPreferences.isWakeEnabled(this)
+    ) {
+        AgentVoiceInteractionService.startSelectedListener(this)
+    } else {
+        WakeWordRuntime.stop()
+    }
     super.onDestroy()
 }
 }

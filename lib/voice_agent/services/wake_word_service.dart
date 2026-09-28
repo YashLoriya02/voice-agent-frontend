@@ -45,10 +45,17 @@ class WakeWordService {
   bool _desiredListening = false;
   bool _detectionInProgress = false;
   bool _disposed = false;
+  bool _assistantRoleHeld = false;
+  bool _persistedWakeEnabled = true;
+  bool _lastActivationFromSystemAssistant = false;
 
   WakeWordState get state => _state;
   bool get isListening => _state == WakeWordState.listening;
   bool get isConfigured => _initialized;
+  bool get isSystemAssistant => _assistantRoleHeld;
+  bool get persistedWakeEnabled => _persistedWakeEnabled;
+  bool get lastActivationFromSystemAssistant =>
+      _lastActivationFromSystemAssistant;
 
   Future<bool> initialize() async {
     if (_disposed) return false;
@@ -67,6 +74,13 @@ class WakeWordService {
 
     try {
       await _channel.invokeMethod<void>('initialize');
+      await refreshAssistantStatus();
+
+      final pendingActivation =
+          await _channel.invokeMethod<bool>('consumePendingActivation') ?? false;
+      if (pendingActivation) {
+        scheduleMicrotask(() => _dispatchDetection(fromSystemAssistant: true));
+      }
       return true;
     } on PlatformException catch (error) {
       _log('Initialization failed: ${error.code}: ${error.message}');
@@ -104,6 +118,92 @@ class WakeWordService {
     if (_disposed) return;
     _desiredListening = false;
     await _enqueue(_stopNow);
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    if (_disposed || !Platform.isAndroid) return;
+    _desiredListening = enabled;
+    try {
+      await _channel.invokeMethod<void>('setEnabled', {'enabled': enabled});
+    } on PlatformException catch (error) {
+      _log('Unable to persist wake setting: ${error.code}: ${error.message}');
+    }
+  }
+
+  Future<bool> refreshAssistantStatus() async {
+    if (_disposed || !Platform.isAndroid) return false;
+    try {
+      final result = await _channel.invokeMapMethod<Object?, Object?>(
+        'assistantStatus',
+      );
+      _assistantRoleHeld = result?['selected'] == true;
+      _persistedWakeEnabled = result?['wakeEnabled'] != false;
+      return _assistantRoleHeld;
+    } on PlatformException catch (error) {
+      _log('Assistant status failed: ${error.code}: ${error.message}');
+      _assistantRoleHeld = false;
+      return false;
+    }
+  }
+
+  Future<bool> requestAssistantRole() async {
+    if (_disposed || !Platform.isAndroid) return false;
+    try {
+      final selected =
+          await _channel.invokeMethod<bool>('requestAssistantRole') ?? false;
+      _assistantRoleHeld = selected;
+      return selected;
+    } on PlatformException catch (error) {
+      _log('Assistant role request failed: ${error.code}: ${error.message}');
+      return false;
+    }
+  }
+
+  /// Opens the same native bottom nudge used by the Android system assistant.
+  /// The caller only exposes this action in Flutter debug builds.
+  Future<bool> previewAssistantUi() async {
+    if (_disposed || !Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('previewAssistantUi') ?? false;
+    } on PlatformException catch (error) {
+      _log('Assistant preview failed: ${error.code}: ${error.message}');
+      return false;
+    }
+  }
+
+  Future<String> preferredProvider() async {
+    if (_disposed || !Platform.isAndroid) return 'customGroq';
+    try {
+      return await _channel.invokeMethod<String>('getPreferredProvider') ??
+          'customGroq';
+    } on PlatformException catch (error) {
+      _log('Preferred provider read failed: ${error.code}: ${error.message}');
+      return 'customGroq';
+    }
+  }
+
+  Future<void> setPreferredProvider(String provider) async {
+    if (_disposed || !Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>(
+        'setPreferredProvider',
+        {'provider': provider},
+      );
+    } on PlatformException catch (error) {
+      _log('Preferred provider save failed: ${error.code}: ${error.message}');
+    }
+  }
+
+  Future<void> handoffToBackground({required bool canListen}) async {
+    if (_disposed || !Platform.isAndroid || !_assistantRoleHeld) return;
+    try {
+      await _channel.invokeMethod<void>(
+        'backgroundHandoff',
+        {'canListen': canListen},
+      );
+    } on PlatformException catch (error) {
+      _log('Background handoff failed: ${error.code}: ${error.message}');
+    }
   }
 
   Future<void> _stopNow() async {
@@ -155,25 +255,14 @@ class WakeWordService {
         break;
 
       case 'detected':
-        if (_detectionInProgress) return null;
-        _detectionInProgress = true;
-        _desiredListening = false;
-
         final text = arguments['text']?.toString().trim() ?? 'hey agent';
         _log('Detected: "$text"; native microphone is released.');
-        _setState(WakeWordState.detected, 'Hey Agent detected');
+        await _dispatchDetection(fromSystemAssistant: false);
+        break;
 
-        try {
-          await onDetected();
-        } catch (error, stackTrace) {
-          _log('Detection callback failed: $error');
-          debugPrintStack(stackTrace: stackTrace);
-          if (!_disposed) {
-            _setState(WakeWordState.error, 'Could not start the agent.');
-          }
-        } finally {
-          _detectionInProgress = false;
-        }
+      case 'activation':
+        _log('System assistant greeting finished; activating Flutter agent.');
+        await _dispatchDetection(fromSystemAssistant: true);
         break;
 
       default:
@@ -181,6 +270,26 @@ class WakeWordService {
     }
 
     return null;
+  }
+
+  Future<void> _dispatchDetection({required bool fromSystemAssistant}) async {
+    if (_disposed || _detectionInProgress) return;
+    _detectionInProgress = true;
+    _desiredListening = false;
+    _lastActivationFromSystemAssistant = fromSystemAssistant;
+    _setState(WakeWordState.detected, 'Hey Agent detected');
+
+    try {
+      await onDetected();
+    } catch (error, stackTrace) {
+      _log('Detection callback failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!_disposed) {
+        _setState(WakeWordState.error, 'Could not start the agent.');
+      }
+    } finally {
+      _detectionInProgress = false;
+    }
   }
 
   WakeWordState _stateFromNative(String? value) {

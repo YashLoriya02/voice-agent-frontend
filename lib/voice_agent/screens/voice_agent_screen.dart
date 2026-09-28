@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -18,6 +19,20 @@ import '../tools/tool_executor.dart';
 import '../services/deepgram_voice_agent_service.dart';
 
 enum AgentProvider { customGroq, deepgramVoiceAgent }
+
+enum _ProviderVoiceActionType { current, switchProvider }
+
+class _ProviderVoiceAction {
+  const _ProviderVoiceAction.current()
+      : type = _ProviderVoiceActionType.current,
+        target = null;
+
+  const _ProviderVoiceAction.switchProvider([this.target])
+      : type = _ProviderVoiceActionType.switchProvider;
+
+  final _ProviderVoiceActionType type;
+  final AgentProvider? target;
+}
 
 enum VoiceUiState {
   idle,
@@ -65,6 +80,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   bool _switchingProvider = false;
 
+  bool _voiceControlInProgress = false;
+
   int _customCommandGeneration = 0;
 
   int _speechGeneration = 0;
@@ -82,6 +99,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   bool _deepgramFallbackPending = false;
 
   bool _wakeWordEnabled = true;
+
+  bool _requestingAssistantRole = false;
 
   WakeWordState _wakeWordState = WakeWordState.uninitialized;
 
@@ -188,14 +207,27 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_startWakeWordIfIdle());
+      unawaited(_initializeWakeWordExperience());
     });
+  }
+
+  Future<void> _initializeWakeWordExperience() async {
+    await _wakeWord.refreshAssistantStatus();
+    final preferredProvider = await _wakeWord.preferredProvider();
+    if (!mounted) return;
+    setState(() {
+      _wakeWordEnabled = _wakeWord.persistedWakeEnabled;
+      _provider = preferredProvider == AgentProvider.deepgramVoiceAgent.name
+          ? AgentProvider.deepgramVoiceAgent
+          : AgentProvider.customGroq;
+    });
+    await _startWakeWordIfIdle();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_startWakeWordIfIdle());
+      unawaited(_initializeWakeWordExperience());
       return;
     }
 
@@ -203,12 +235,24 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
-      unawaited(_wakeWord.stop());
+      if (_wakeWord.isSystemAssistant) {
+        unawaited(
+          _wakeWord.handoffToBackground(
+            canListen: _wakeWordEnabled &&
+                !_voiceEngineBusy &&
+                _wakeWordState != WakeWordState.detected,
+          ),
+        );
+      } else {
+        unawaited(_wakeWord.stop());
+      }
     }
   }
 
   void _handleDeepgramAgentState(DeepgramVoiceAgentState state) {
-    if (!mounted || _provider != AgentProvider.deepgramVoiceAgent) {
+    if (!mounted ||
+        _provider != AgentProvider.deepgramVoiceAgent ||
+        _voiceControlInProgress) {
       return;
     }
 
@@ -268,8 +312,24 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   void _handleDeepgramAgentTranscript(DeepgramVoiceAgentTranscript transcript) {
-    if (!mounted || _provider != AgentProvider.deepgramVoiceAgent) {
+    if (!mounted ||
+        _provider != AgentProvider.deepgramVoiceAgent ||
+        _voiceControlInProgress) {
       return;
+    }
+
+    if (transcript.isUser) {
+      final voiceAction = _parseProviderVoiceAction(transcript.content);
+      if (voiceAction != null) {
+        setState(() {
+          _transcript = transcript.content;
+          _agentMessage = null;
+        });
+        unawaited(
+          _executeProviderVoiceAction(transcript.content, voiceAction),
+        );
+        return;
+      }
     }
 
     setState(() {
@@ -415,6 +475,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   bool get _voiceEngineBusy {
     return _switchingProvider ||
+        _voiceControlInProgress ||
         _processing ||
         _deepgramVoiceAgent.isConnected ||
         _state == VoiceUiState.listening ||
@@ -450,8 +511,29 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     if (!mounted || !_wakeWordEnabled || _voiceEngineBusy) return;
 
     HapticFeedback.heavyImpact();
+
+    // The native system-assistant overlay has already spoken this greeting.
+    // In app-only fallback mode Flutter speaks it before acquiring the STT mic.
+    if (!_wakeWord.lastActivationFromSystemAssistant) {
+      const greeting = 'Hey, how can I help you?';
+      setState(() {
+        _state = VoiceUiState.speaking;
+        _agentMessage = greeting;
+      });
+
+      try {
+        await _tts.speakAndWait(greeting);
+      } catch (error) {
+        debugPrint('Wake greeting TTS failed: $error');
+      }
+
+      if (!mounted) return;
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+    }
+
     setState(() {
       _agentMessage = 'I\'m listening.';
+      _state = VoiceUiState.idle;
     });
 
     await _handleVoiceButton();
@@ -462,6 +544,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       _wakeWordEnabled = enabled;
     });
 
+    await _wakeWord.setEnabled(enabled);
+
     if (!enabled) {
       await _wakeWord.stop();
       return;
@@ -470,7 +554,50 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     await _startWakeWordIfIdle();
   }
 
-  Future<void> _switchProvider(AgentProvider provider) async {
+  Future<void> _requestSystemAssistantRole() async {
+    if (_requestingAssistantRole) return;
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Opening Android assistant selection…'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    setState(() {
+      _requestingAssistantRole = true;
+      _wakeWordMessage = 'Choose AI Voice Agent as your assistant';
+    });
+
+    final selected = await _wakeWord.requestAssistantRole();
+    if (!mounted) return;
+
+    setState(() {
+      _requestingAssistantRole = false;
+      _wakeWordMessage = selected
+          ? 'Works with the app closed'
+          : 'Select AI Voice Agent in Android assistant settings';
+    });
+
+    if (selected) {
+      await _wakeWord.setEnabled(_wakeWordEnabled);
+      await _startWakeWordIfIdle();
+    }
+  }
+
+  Future<void> _previewAssistantUi() async {
+    HapticFeedback.selectionClick();
+    final opened = await _wakeWord.previewAssistantUi();
+    if (!mounted || opened) return;
+
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('Assistant preview is Android-only.')),
+    );
+  }
+
+  Future<void> _switchProvider(
+    AgentProvider provider, {
+    bool restartWakeWord = true,
+  }) async {
     if (_provider == provider || _switchingProvider) {
       return;
     }
@@ -509,7 +636,11 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       }
     }
 
-    await _startWakeWordIfIdle();
+    await _wakeWord.setPreferredProvider(provider.name);
+
+    if (restartWakeWord) {
+      await _startWakeWordIfIdle();
+    }
 
     HapticFeedback.selectionClick();
   }
@@ -689,6 +820,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
     final title = !_wakeWordEnabled
         ? 'HEY AGENT OFF'
+        : _wakeWord.isSystemAssistant
+            ? 'HEY AGENT • SYSTEM READY'
         : setupRequired
             ? 'HEY AGENT • SETUP REQUIRED'
             : listening
@@ -749,12 +882,59 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
               ],
             ),
           ),
+          if (!_wakeWord.isSystemAssistant)
+            TextButton(
+              onPressed: _requestingAssistantRole
+                  ? null
+                  : () => unawaited(_requestSystemAssistantRole()),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF65A9FF),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 34),
+              ),
+              child: Text(
+                _requestingAssistantRole ? 'WAIT' : 'MAKE DEFAULT',
+                style: const TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .7,
+                ),
+              ),
+            ),
           Switch.adaptive(
             value: _wakeWordEnabled,
             activeColor: const Color(0xFF53E6B1),
             onChanged: (value) => unawaited(_toggleWakeWord(value)),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _assistantPreviewButton() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 9, 22, 0),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _previewAssistantUi,
+          icon: const Icon(Icons.visibility_rounded, size: 16),
+          label: const Text('PREVIEW HEY AGENT NUDGE'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF65D9FF),
+            side: const BorderSide(color: Color(0xFF194979)),
+            backgroundColor: const Color(0xB307111F),
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            textStyle: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(13),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -902,6 +1082,12 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     final command = raw.trim();
 
     if (command.isEmpty || _processing) {
+      return;
+    }
+
+    final voiceAction = _parseProviderVoiceAction(command);
+    if (voiceAction != null) {
+      await _executeProviderVoiceAction(command, voiceAction);
       return;
     }
 
@@ -1166,6 +1352,131 @@ Complete the original request using the answer.
         generation == _customCommandGeneration;
   }
 
+  _ProviderVoiceAction? _parseProviderVoiceAction(String raw) {
+    final normalized = raw
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9 ]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    if (normalized.isEmpty) return null;
+
+    final mentionsDeepgram = RegExp(r'\bdeep ?gram\b').hasMatch(normalized);
+    final mentionsGroq = RegExp(r'\bgroq\b').hasMatch(normalized) ||
+        normalized.contains('custom model') ||
+        normalized.contains('custom provider');
+    final asksCurrent =
+        RegExp(r'\b(current|active) (model|provider)\b').hasMatch(normalized) ||
+            RegExp(r'\b(what|which) (model|provider)\b').hasMatch(normalized) ||
+            normalized.contains('model are you using') ||
+            normalized.contains('provider are you using');
+    final hasDirectSwitchVerb =
+        RegExp(r'\b(switch|change|swap|select|choose)\b').hasMatch(normalized) ||
+            RegExp(r'\b(go|move) to\b').hasMatch(normalized);
+    final hasUseRequest = RegExp(
+      r'^(please )?((can|could|would) you )?use\b',
+    ).hasMatch(normalized);
+    final hasSwitchVerb = hasDirectSwitchVerb || hasUseRequest;
+    final mentionsProvider =
+        RegExp(r'\b(model|provider|engine)\b').hasMatch(normalized) ||
+            mentionsDeepgram ||
+            mentionsGroq ||
+            normalized.contains('other one');
+
+    if (asksCurrent && !hasDirectSwitchVerb) {
+      return const _ProviderVoiceAction.current();
+    }
+
+    if (hasSwitchVerb && mentionsProvider) {
+      if (mentionsDeepgram && !mentionsGroq) {
+        return const _ProviderVoiceAction.switchProvider(
+          AgentProvider.deepgramVoiceAgent,
+        );
+      }
+      if (mentionsGroq && !mentionsDeepgram) {
+        return const _ProviderVoiceAction.switchProvider(
+          AgentProvider.customGroq,
+        );
+      }
+
+      return const _ProviderVoiceAction.switchProvider();
+    }
+
+    return null;
+  }
+
+  Future<void> _executeProviderVoiceAction(
+    String command,
+    _ProviderVoiceAction action,
+  ) async {
+    if (!mounted || _voiceControlInProgress || _switchingProvider) return;
+
+    _voiceControlInProgress = true;
+    final previousProvider = _provider;
+
+    try {
+      final target = action.type == _ProviderVoiceActionType.switchProvider
+          ? action.target ?? _oppositeProvider(previousProvider)
+          : null;
+
+      if (target != null && target != previousProvider) {
+        // This changes _provider before awaiting teardown, so late Deepgram
+        // callbacks cannot turn the voice command into another agent turn.
+        await _switchProvider(target, restartWakeWord: false);
+      } else {
+        await _wakeWord.stop();
+        if (previousProvider == AgentProvider.deepgramVoiceAgent) {
+          _deepgramSpeechFallbackTimer?.cancel();
+          _deepgramResponseGeneration++;
+          await _tts.stop();
+          await _deepgramVoiceAgent.disconnect();
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _transcript = command;
+      });
+
+      final message = switch (action.type) {
+        _ProviderVoiceActionType.current => _currentProviderMessage(),
+        _ProviderVoiceActionType.switchProvider when target == previousProvider =>
+          'You are already using ${_providerName(previousProvider)}.',
+        _ProviderVoiceActionType.switchProvider =>
+          'Switched from ${_providerName(previousProvider)} to ${_providerName(target!)}.',
+      };
+
+      await _showAndSpeak(message, VoiceUiState.success);
+    } catch (error) {
+      debugPrint('Voice provider control failed: $error');
+      await _showAndSpeak(
+        'I couldn\'t change the voice provider.',
+        VoiceUiState.error,
+      );
+    } finally {
+      _voiceControlInProgress = false;
+      await _startWakeWordIfIdle();
+    }
+  }
+
+  AgentProvider _oppositeProvider(AgentProvider provider) {
+    return provider == AgentProvider.customGroq
+        ? AgentProvider.deepgramVoiceAgent
+        : AgentProvider.customGroq;
+  }
+
+  String _providerName(AgentProvider provider) {
+    return provider == AgentProvider.customGroq
+        ? 'Groq'
+        : 'Deepgram Voice Agent';
+  }
+
+  String _currentProviderMessage() {
+    return _provider == AgentProvider.customGroq
+        ? 'The current provider is Groq, using the GPT OSS 20B model.'
+        : 'The current provider is Deepgram Voice Agent, using Claude Sonnet 4.6.';
+  }
+
   // ============================================================
   // CONTACT SELECTION
   // ============================================================
@@ -1361,6 +1672,8 @@ Complete the original request using the answer.
                 _providerSelector(),
 
                 _wakeWordControl(),
+
+                if (kDebugMode) _assistantPreviewButton(),
 
                 Expanded(
                   child: SingleChildScrollView(
