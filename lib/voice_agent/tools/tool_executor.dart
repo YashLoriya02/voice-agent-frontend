@@ -1,6 +1,9 @@
 import '../models/contact_match.dart';
+import '../models/installed_app.dart';
+import '../models/message_readout.dart';
 import '../models/tool_execution_result.dart';
 import '../services/device_action_service.dart';
+import '../services/message_notification_service.dart';
 import 'app_registry.dart';
 
 typedef BeforeActionCallback = Future<void> Function(String message);
@@ -12,9 +15,24 @@ class ToolExecutor {
     required Map<String, dynamic> arguments,
 
     BeforeActionCallback? onBeforeAction,
+    Future<void> Function(MessageReadout)? onLocalReadout,
   }) async {
     try {
       switch (tool) {
+        case 'read_messages':
+          return await MessageNotificationService.execute(
+            arguments,
+            readAloud: true,
+            onLocalReadout: onLocalReadout,
+          );
+
+        case 'check_messages':
+          return await MessageNotificationService.execute(
+            arguments,
+            readAloud: false,
+            onLocalReadout: onLocalReadout,
+          );
+
         case 'set_alarm':
           return await _setAlarm(arguments, onBeforeAction);
 
@@ -30,12 +48,41 @@ class ToolExecutor {
         case 'send_message':
           return await _sendMessage(arguments, onBeforeAction);
 
+        case 'set_torch':
+          if (arguments['enabled'] is! bool) {
+            return ToolExecutionResult.error(
+              'Tell me whether to turn the torch on or off.',
+            );
+          }
+          return await _deviceControl('setTorch', arguments);
+
+        case 'control_volume':
+          return await _deviceControl('controlVolume', arguments);
+
+        case 'set_brightness':
+          return await _deviceControl('setBrightness', arguments);
+
+        case 'get_battery':
+          return await _deviceControl('getBattery', const {});
+
         default:
           return ToolExecutionResult.error('That action isn\'t available yet.');
       }
     } catch (e) {
       return ToolExecutionResult.error('I couldn\'t complete that action.');
     }
+  }
+
+  static Future<ToolExecutionResult> _deviceControl(
+    String method,
+    Map<String, dynamic> arguments,
+  ) async {
+    final result = await DeviceActionService.deviceControl(method, arguments);
+    final message =
+        result['message']?.toString() ?? 'The device action failed.';
+    return result['success'] == true
+        ? ToolExecutionResult.completed(message, speakResult: true)
+        : ToolExecutionResult.error(message);
   }
 
   // ---------------------------------------------
@@ -197,25 +244,59 @@ class ToolExecutor {
       return ToolExecutionResult.error('Tell me which app you want to open.');
     }
 
-    final app = AppRegistry.find(appName);
-
-    if (app == null) {
+    final apps = await DeviceActionService.getLaunchableApps();
+    var matches = apps.where((app) => app.packageName == appName).toList();
+    if (matches.isEmpty) {
+      matches = matchInstalledApps(appName, apps, allowApproximate: false);
+    }
+    final fallback = AppRegistry.find(appName);
+    // Preserve useful aliases (e.g. "insta") and system intents, while new
+    // installed apps are resolved from their real labels without a mapping.
+    if (matches.isEmpty && fallback != null) {
+      matches = apps
+          .where((app) => fallback.packageNames.contains(app.packageName))
+          .toList();
+    }
+    if (matches.isEmpty && fallback == null) {
+      matches = matchInstalledApps(appName, apps);
+    }
+    if (matches.length > 1) {
+      final duplicateNames =
+          matches.map((app) => app.name).toSet().length != matches.length;
+      final choices = matches
+          .map(
+            (app) => matches.where((other) => other.name == app.name).length > 1
+                ? '${app.name} (${app.packageName})'
+                : app.name,
+          )
+          .join(', ');
+      return ToolExecutionResult.needsInput(
+        'I found $choices. Which app do you mean?'
+        '${duplicateNames ? ' For identical names, tell me the package shown.' : ''}',
+      );
+    }
+    if (matches.isEmpty && fallback == null) {
       return ToolExecutionResult.error(
-        'I don\'t know how to open $appName yet.',
+        'I couldn\'t find $appName among your installed apps.',
       );
     }
 
-    final message = 'Opening ${app.displayName}.';
+    final match = matches.isEmpty ? null : matches.single;
+    final message = 'Opening ${match?.name ?? fallback!.displayName}.';
 
     if (beforeAction != null) {
       await beforeAction(message);
     }
 
     try {
-      await DeviceActionService.openAppTarget(
-        packageNames: app.packageNames,
-        systemTarget: app.systemTarget,
-      );
+      if (match != null) {
+        await DeviceActionService.openApp(packageName: match.packageName);
+      } else {
+        await DeviceActionService.openAppTarget(
+          packageNames: fallback!.packageNames,
+          systemTarget: fallback.systemTarget,
+        );
+      }
     } catch (_) {
       return ToolExecutionResult.error(
         'I couldn\'t open $appName on this phone.',
@@ -294,8 +375,9 @@ class ToolExecutor {
         !await DeviceActionService.isWhatsAppAvailable()) {
       resolvedChannel = 'messages';
     }
-    final requestedName =
-        resolvedChannel == 'whatsapp' ? 'WhatsApp' : 'Messages';
+    final requestedName = resolvedChannel == 'whatsapp'
+        ? 'WhatsApp'
+        : 'Messages';
     final actionMessage = channel == 'whatsapp' && resolvedChannel == 'messages'
         ? 'WhatsApp is unavailable, so I\'m opening Messages for ${contact.name} instead.'
         : 'Opening $requestedName for ${contact.name} with your message ready.';

@@ -48,12 +48,10 @@ class AgentTtsService {
     _speaking = true;
 
     try {
-      final request = http.Request(
-        'POST',
-        Uri.parse('$backendUrl/deepgram/tts'),
-      )
-        ..headers['Content-Type'] = 'application/json'
-        ..body = jsonEncode(<String, String>{'text': clean});
+      final request =
+          http.Request('POST', Uri.parse('$backendUrl/deepgram/tts'))
+            ..headers['Content-Type'] = 'application/json'
+            ..body = jsonEncode(<String, String>{'text': clean});
 
       final response = await client
           .send(request)
@@ -94,16 +92,10 @@ class AgentTtsService {
       // the first PCM chunk arrives.
       await player.play();
 
-      debugPrint('Streaming TTS playback started: $clean');
+      debugPrint('Streaming TTS playback started');
 
       unawaited(
-        _consumeAudio(
-          response.stream,
-          player,
-          client,
-          completion,
-          generation,
-        ),
+        _consumeAudio(response.stream, player, client, completion, generation),
       );
     } catch (error) {
       if (generation == _playbackGeneration) {

@@ -25,6 +25,9 @@ import java.util.Locale
 
 open class MainActivity : FlutterActivity() {
 
+    private val deviceControls by lazy { DeviceControls(this) }
+    private val messageNotifications by lazy { MessageNotificationBridge(this) }
+
     companion object {
         private const val TAG = "HeyAgent/MainActivity"
     }
@@ -84,9 +87,20 @@ open class MainActivity : FlutterActivity() {
             CHANNEL
         ).setMethodCallHandler { call, result ->
 
+            if (deviceControls.handle(call, result)) return@setMethodCallHandler
+            if (messageNotifications.handle(call, result)) return@setMethodCallHandler
+
             try {
 
                 when (call.method) {
+
+                    "closeAssistant" -> {
+                        result.success(true)
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            AgentVoiceInteractionSession.dismissActiveSession()
+                            if (this is AssistantHostActivity) finish() else finishAndRemoveTask()
+                        }
+                    }
 
                     "requestContactsPermission" -> {
                         requestContactsPermission(result)
@@ -693,6 +707,8 @@ override fun onRequestPermissionsResult(
         grantResults
     )
 
+    deviceControls.onPermissionResult(requestCode, grantResults)
+
     if (
         requestCode ==
         CONTACTS_PERMISSION_REQUEST_CODE
@@ -1092,6 +1108,8 @@ private fun normalizePhoneNumber(
 }
 
 override fun onDestroy() {
+        messageNotifications.dispose()
+    deviceControls.dispose()
     wakeWordChannel?.setMethodCallHandler(null)
     wakeWordChannel = null
     WakeWordRuntime.removeListener(wakeWordListener)

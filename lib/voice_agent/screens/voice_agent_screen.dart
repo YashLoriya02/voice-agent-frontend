@@ -8,14 +8,19 @@ import 'package:flutter/services.dart';
 import '../models/agent_response.dart';
 import '../models/contact_match.dart';
 import '../models/tool_execution_result.dart';
+import '../models/message_readout.dart';
+import '../widgets/message_readout_view.dart';
+import '../tools/message_commands.dart';
 
 import '../services/agent_tts_service.dart';
 import '../services/deepgram_service.dart';
 import '../services/device_action_service.dart';
+import '../services/message_notification_service.dart';
 import '../services/voice_agent_api_service.dart';
 import '../services/wake_word_service.dart';
 
 import '../tools/tool_executor.dart';
+import '../tools/session_commands.dart';
 import '../services/deepgram_voice_agent_service.dart';
 
 enum AgentProvider { customGroq, deepgramVoiceAgent }
@@ -85,6 +90,9 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   bool _switchingProvider = false;
 
   bool _voiceControlInProgress = false;
+  bool _closingSession = false;
+  bool _localReadoutInProgress = false;
+  MessageReadout? _messageReadout;
 
   int _customCommandGeneration = 0;
 
@@ -133,6 +141,21 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
       // No automatic greeting in app mode; user starts the conversation.
       greeting: null,
+
+      onSessionEndRequested: _closeAssistantSession,
+      onLocalReadout: (message) {
+        if (!mounted || _closingSession) return;
+        _localReadoutInProgress = true;
+        _deepgramSpeechFallbackTimer?.cancel();
+        setState(() {
+          _messageReadout = message;
+          _agentMessage = message.displayText;
+          _state = VoiceUiState.speaking;
+        });
+      },
+      onLocalReadoutFinished: () {
+        _localReadoutInProgress = false;
+      },
 
       onStateChanged: _handleDeepgramAgentState,
 
@@ -263,6 +286,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   void _handleDeepgramAgentState(DeepgramVoiceAgentState state) {
     if (!mounted ||
+        _closingSession ||
         _provider != AgentProvider.deepgramVoiceAgent ||
         _voiceControlInProgress) {
       return;
@@ -325,12 +349,17 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
   void _handleDeepgramAgentTranscript(DeepgramVoiceAgentTranscript transcript) {
     if (!mounted ||
+        _closingSession ||
         _provider != AgentProvider.deepgramVoiceAgent ||
         _voiceControlInProgress) {
       return;
     }
 
     if (transcript.isUser) {
+      if (isSessionExitCommand(transcript.content)) {
+        unawaited(_closeAssistantSession());
+        return;
+      }
       if (_isOpenAgentAppCommand(transcript.content)) {
         setState(() {
           _transcript = transcript.content;
@@ -365,6 +394,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
         // assistant reply as several ConversationText messages, all of which
         // are appended below.
         _agentMessage = null;
+        _messageReadout = null;
       }
 
       if (transcript.isAssistant) {
@@ -396,7 +426,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   void _scheduleDeepgramSpeechFallback({bool runSoon = false}) {
-    if (_provider != AgentProvider.deepgramVoiceAgent ||
+    if (_localReadoutInProgress ||
+        _provider != AgentProvider.deepgramVoiceAgent ||
         _deepgramNativeAudioStarted) {
       return;
     }
@@ -418,6 +449,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     final completeMessage = _agentMessage?.trim() ?? '';
     if (!mounted ||
         completeMessage.isEmpty ||
+        _localReadoutInProgress ||
         _provider != AgentProvider.deepgramVoiceAgent ||
         generation != _deepgramResponseGeneration ||
         _deepgramNativeAudioStarted) {
@@ -504,6 +536,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   Future<void> _startWakeWordIfIdle() async {
+    if (_closingSession) return;
     debugPrint(
       '[WakeWord/UI] start check: mounted=$mounted, '
       'enabled=$_wakeWordEnabled, busy=$_voiceEngineBusy, '
@@ -669,9 +702,13 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   Future<void> _cancelCustomActivity({bool resetUi = true}) async {
+    _localReadoutInProgress = false;
     _customCommandGeneration++;
     _speechGeneration++;
     _processing = false;
+    try {
+      await MessageNotificationService.stopReadout();
+    } catch (_) {}
 
     VoiceAgentApiService.cancelActiveRequest();
 
@@ -974,6 +1011,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   Future<void> _handleVoiceButton() async {
+    if (_localReadoutInProgress) {
+      await _cancelCustomActivity();
+      return;
+    }
     if (_switchingProvider) return;
 
     // Vosk and the selected provider cannot own the recorder together.
@@ -1107,6 +1148,11 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       return;
     }
 
+    if (isSessionExitCommand(command)) {
+      await _closeAssistantSession();
+      return;
+    }
+
     if (_isOpenAgentAppCommand(command)) {
       await _openVisibleAgentApp();
       return;
@@ -1124,6 +1170,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
     setState(() {
       _state = VoiceUiState.thinking;
+      _messageReadout = null;
 
       _contacts = [];
 
@@ -1231,10 +1278,28 @@ Complete the original request using the answer.
       // EXECUTE TOOL
       // ========================================================
 
+      if (response.tool == 'sleep_agent') {
+        await _closeAssistantSession();
+        return;
+      }
+
       final result = await ToolExecutor.execute(
         tool: response.tool!,
 
-        arguments: response.arguments,
+        arguments: response.tool == 'read_messages'
+            ? resolveMessageReadArguments(command, response.arguments)
+            : response.arguments,
+        onLocalReadout: (message) async {
+          if (!_isCustomCommandActive(commandGeneration)) {
+            throw const VoiceAgentRequestCancelled();
+          }
+          _localReadoutInProgress = true;
+          setState(() {
+            _state = VoiceUiState.speaking;
+            _messageReadout = message;
+            _agentMessage = message.displayText;
+          });
+        },
 
         /*
          * Called AFTER the local data
@@ -1307,6 +1372,17 @@ Complete the original request using the answer.
 
       switch (result.status) {
         case ToolExecutionStatus.completed:
+          if (result.containsMessageData) {
+            _rememberConversation(
+              command,
+              'The requested notification readout completed on the phone.',
+            );
+          }
+          if (result.speakResult) {
+            _rememberConversation(command, result.message);
+            await _showAndSpeak(result.message, VoiceUiState.success);
+            break;
+          }
 
           /*
            * Do NOT speak again.
@@ -1354,6 +1430,22 @@ Complete the original request using the answer.
           await _showAndSpeak(result.message, VoiceUiState.error);
 
           break;
+
+        case ToolExecutionStatus.needsInput:
+          _pendingOriginalCommand ??= command;
+          _pendingQuestion = result.containsMessageData
+              ? 'Which sender or conversation do you mean?'
+              : result.message;
+          _rememberConversation(command, _pendingQuestion!);
+          if (result.spokenLocally) {
+            setState(() {
+              _state = VoiceUiState.needsInput;
+              _agentMessage = result.message;
+            });
+          } else {
+            await _showAndSpeak(result.message, VoiceUiState.needsInput);
+          }
+          return;
       }
 
       _clearContext();
@@ -1368,6 +1460,7 @@ Complete the original request using the answer.
       );
     } finally {
       if (commandGeneration == _customCommandGeneration) {
+        _localReadoutInProgress = false;
         _processing = false;
 
         if (_tts.isSpeaking) {
@@ -1401,8 +1494,35 @@ Complete the original request using the answer.
 
   bool _isCustomCommandActive(int generation) {
     return mounted &&
+        !_closingSession &&
         _provider == AgentProvider.customGroq &&
         generation == _customCommandGeneration;
+  }
+
+  Future<void> _closeAssistantSession() async {
+    if (_closingSession || !mounted) return;
+    _closingSession = true;
+    _voiceControlInProgress = true;
+    _deepgramSpeechFallbackTimer?.cancel();
+    _deepgramResponseGeneration++;
+    try {
+      await _cancelCustomActivity(resetUi: false);
+      await _deepgramVoiceAgent.disconnect();
+      await _wakeWord.stop();
+      _clearContext();
+      await DeviceActionService.closeAssistant();
+    } catch (error) {
+      debugPrint('Assistant dismissal failed: $error');
+      _closingSession = false;
+      _voiceControlInProgress = false;
+      if (mounted) {
+        setState(() {
+          _state = VoiceUiState.error;
+          _agentMessage =
+              'I stopped listening, but could not close the assistant.';
+        });
+      }
+    }
   }
 
   bool _isOpenAgentAppCommand(String raw) {
@@ -1726,6 +1846,7 @@ Complete the original request using the answer.
     final speechGeneration = ++_speechGeneration;
 
     setState(() {
+      _messageReadout = null;
       _state = VoiceUiState.speaking;
 
       _agentMessage = message;
@@ -1953,6 +2074,146 @@ Complete the original request using the answer.
     );
   }
 
+  Future<void> _readSavedMessages(Map<String, dynamic> arguments) async {
+    if (_processing ||
+        _localReadoutInProgress ||
+        _switchingProvider ||
+        _closingSession) {
+      return;
+    }
+    final generation = ++_customCommandGeneration;
+    bool active() =>
+        mounted &&
+        !_closingSession &&
+        !_switchingProvider &&
+        generation == _customCommandGeneration;
+    _processing = true;
+    _localReadoutInProgress = true;
+    _deepgramSpeechFallbackTimer?.cancel();
+    _deepgramResponseGeneration++;
+    setState(() {
+      _state = VoiceUiState.thinking;
+      _transcript = 'Read all saved messages.';
+      _agentMessage = null;
+      _messageReadout = null;
+    });
+    try {
+      await _wakeWord.stop();
+      await _deepgram.cancelListening();
+      await _tts.stop();
+      // A local history-button readout owns the microphone/audio until done.
+      await _deepgramVoiceAgent.disconnect();
+      if (!active()) return;
+      final result = await ToolExecutor.execute(
+        tool: 'read_messages',
+        arguments: arguments,
+        onLocalReadout: (readout) async {
+          if (!active()) throw const VoiceAgentRequestCancelled();
+          _localReadoutInProgress = true;
+          setState(() {
+            _messageReadout = readout;
+            _agentMessage = readout.displayText;
+            _state = VoiceUiState.speaking;
+          });
+        },
+      );
+      if (!active()) return;
+      if (result.status == ToolExecutionStatus.error) {
+        await _showAndSpeak(result.message, VoiceUiState.error);
+      } else {
+        setState(() {
+          _messageReadout = result.messageReadout;
+          _agentMessage = result.message;
+          _state = result.status == ToolExecutionStatus.needsInput
+              ? VoiceUiState.needsInput
+              : VoiceUiState.success;
+        });
+      }
+    } catch (_) {
+      if (active()) {
+        await _showAndSpeak(
+          'I could not replay the saved messages.',
+          VoiceUiState.error,
+        );
+      }
+    } finally {
+      if (generation == _customCommandGeneration) {
+        _processing = false;
+        _localReadoutInProgress = false;
+        if (mounted) setState(() {});
+        await _startWakeWordIfIdle();
+      }
+    }
+  }
+
+  Future<void> _showMessageAccess() async {
+    try {
+      final status = await MessageNotificationService.status();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Message access'),
+          content: Text(
+            '${status['enabled'] == true ? (status['connected'] == true ? 'Notification access is ready.' : 'Access is enabled; the listener is connecting.') : 'Enable notification access for AI Voice Agent.'}\n\n'
+            'Read available WhatsApp and Messages notification previews by voice. New means not yet spoken by this assistant.\n\n'
+            'Previews stay on your phone and are read with an installed on-device voice. Your phone must be unlocked.\n\n'
+            'This does not read the complete inbox or change WhatsApp/SMS read status.',
+          ),
+          actions: [
+            TextButton(
+              onPressed:
+                  _processing || _localReadoutInProgress || _switchingProvider
+                  ? null
+                  : () {
+                      Navigator.pop(dialogContext);
+                      unawaited(
+                        _readSavedMessages({
+                          'channel': 'all',
+                          'unread_only': false,
+                          'read_all': true,
+                        }),
+                      );
+                    },
+              child: const Text('Read all saved'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                try {
+                  await MessageNotificationService.openSettings();
+                } catch (_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Could not open notification access settings.',
+                        ),
+                      ),
+                    );
+                  }
+                }
+              },
+              child: const Text('Open settings'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message access is available on Android.'),
+          ),
+        );
+      }
+    }
+  }
+
   Widget _header() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(22, 18, 22, 0),
@@ -1976,43 +2237,57 @@ Complete the original request using the answer.
 
           const SizedBox(width: 12),
 
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
 
-            children: [
-              Text(
-                'AI AGENT',
+              children: [
+                Text(
+                  'AI AGENT',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
 
-                style: TextStyle(
-                  color: Color(0xFFF5F8FF),
+                  style: TextStyle(
+                    color: Color(0xFFF5F8FF),
 
-                  fontSize: 16,
+                    fontSize: 16,
 
-                  fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w800,
 
-                  letterSpacing: 1.1,
+                    letterSpacing: 1.1,
+                  ),
                 ),
-              ),
 
-              SizedBox(height: 2),
+                SizedBox(height: 2),
 
-              Text(
-                'VOICE COMMAND INTERFACE',
+                Text(
+                  'VOICE COMMAND INTERFACE',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
 
-                style: TextStyle(
-                  color: Color(0xFF63708A),
+                  style: TextStyle(
+                    color: Color(0xFF63708A),
 
-                  fontSize: 9,
+                    fontSize: 9,
 
-                  letterSpacing: 1.7,
+                    letterSpacing: 1.7,
 
-                  fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
 
-          const Spacer(),
+          IconButton(
+            tooltip: 'Message access',
+            onPressed: _showMessageAccess,
+            icon: const Icon(
+              Icons.mark_chat_unread_outlined,
+              color: Color(0xFF7D9FD9),
+              size: 22,
+            ),
+          ),
 
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
@@ -2347,17 +2622,35 @@ Complete the original request using the answer.
 
                 const SizedBox(height: 7),
 
-                Text(
-                  _agentMessage!,
+                if (_messageReadout != null)
+                  MessageReadoutView(
+                    readout: _messageReadout!,
+                    onReadAllAgain:
+                        _processing ||
+                            _localReadoutInProgress ||
+                            _switchingProvider ||
+                            _state == VoiceUiState.thinking ||
+                            _state == VoiceUiState.speaking ||
+                            _state == VoiceUiState.executing
+                        ? null
+                        : () => unawaited(
+                            _readSavedMessages(
+                              _messageReadout!.replayArguments,
+                            ),
+                          ),
+                  )
+                else
+                  Text(
+                    _agentMessage!,
 
-                  style: const TextStyle(
-                    color: Color(0xFFF3F7FF),
+                    style: const TextStyle(
+                      color: Color(0xFFF3F7FF),
 
-                    fontSize: 17,
+                      fontSize: 17,
 
-                    height: 1.4,
+                      height: 1.4,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -2497,6 +2790,7 @@ Complete the original request using the answer.
 
   @override
   void dispose() {
+    unawaited(MessageNotificationService.stopReadout().catchError((_) {}));
     VoiceAgentApiService.cancelActiveRequest();
 
     WidgetsBinding.instance.removeObserver(this);

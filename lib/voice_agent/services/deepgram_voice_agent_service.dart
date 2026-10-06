@@ -9,6 +9,11 @@ import 'package:record/record.dart';
 
 import '../models/tool_execution_result.dart';
 import '../tools/tool_executor.dart';
+import '../models/message_readout.dart';
+import '../tools/message_commands.dart';
+import '../tools/notification_agent_result.dart';
+import 'message_notification_service.dart';
+import '../tools/device_tool_definitions.dart';
 
 enum DeepgramVoiceAgentState {
   disconnected,
@@ -82,6 +87,9 @@ class DeepgramVoiceAgentService {
     this.onFunctionCall,
     this.onAgentAudioStarted,
     this.onAgentAudioDone,
+    this.onSessionEndRequested,
+    this.onLocalReadout,
+    this.onLocalReadoutFinished,
   });
 
   final String backendUrl;
@@ -96,6 +104,10 @@ class DeepgramVoiceAgentService {
   final DeepgramAgentFunctionCallback? onFunctionCall;
   final DeepgramAgentAudioStartedCallback? onAgentAudioStarted;
   final DeepgramAgentAudioDoneCallback? onAgentAudioDone;
+  final Future<void> Function()? onSessionEndRequested;
+  final void Function(MessageReadout)? onLocalReadout;
+  final void Function()? onLocalReadoutFinished;
+  String _lastUserCommand = '';
 
   static const int inputSampleRate = 16000;
   static const int outputSampleRate = 24000;
@@ -331,6 +343,7 @@ class DeepgramVoiceAgentService {
 
   static const List<Map<String, dynamic>> _functionDefinitions =
       <Map<String, dynamic>>[
+        ...deviceToolDefinitions,
         <String, dynamic>{
           'name': 'call_contact',
           'description': 'Call, ring, phone, or dial a contact saved on the user\'s Android phone.',
@@ -371,8 +384,7 @@ class DeepgramVoiceAgentService {
         },
         <String, dynamic>{
           'name': 'send_message',
-          'description':
-              'Prepare a WhatsApp or Android Messages message for a saved phone contact. The user reviews and taps Send. If the user did not specify WhatsApp or Messages, ask them before calling this function.',
+          'description': 'Prepare a WhatsApp or Android Messages message for a saved phone contact. The user reviews and taps Send. If the user did not specify WhatsApp or Messages, ask them before calling this function.',
           'parameters': <String, dynamic>{
             'type': 'object',
             'properties': <String, dynamic>{
@@ -631,8 +643,7 @@ class DeepgramVoiceAgentService {
     // A binary PCM frame can arrive just before AgentStartedSpeaking. In that
     // case _handleAgentAudioChunk has already started this utterance. Do not
     // reset the chain here or the first audible chunks can be discarded.
-    if (_state != DeepgramVoiceAgentState.speaking ||
-        _dropCurrentAgentAudio) {
+    if (_state != DeepgramVoiceAgentState.speaking || _dropCurrentAgentAudio) {
       _playbackEpoch++;
       _dropCurrentAgentAudio = false;
       _playerStarted = false;
@@ -678,6 +689,9 @@ class DeepgramVoiceAgentService {
   }
 
   Future<void> _interruptAgentAudio() async {
+    try {
+      await MessageNotificationService.stopReadout();
+    } catch (_) {}
     _playbackEpoch++;
     _dropCurrentAgentAudio = true;
     _playerStarted = false;
@@ -832,6 +846,7 @@ class DeepgramVoiceAgentService {
       role: role,
       content: content,
     );
+    if (transcript.isUser) _lastUserCommand = content;
     if (!_transcriptController.isClosed) {
       _transcriptController.add(transcript);
     }
@@ -848,11 +863,13 @@ class DeepgramVoiceAgentService {
   }
 
   Future<void> _handleFunctionCallRequest(Map<String, dynamic> message) async {
+    final generation = _connectionGeneration;
     final rawFunctions = message['functions'];
     if (rawFunctions is! List) return;
 
     // Device-changing actions are executed sequentially to avoid races.
     for (final rawFunction in rawFunctions) {
+      if (generation != _connectionGeneration || !isConnected) return;
       if (rawFunction is! Map) continue;
 
       final function = Map<String, dynamic>.from(rawFunction);
@@ -871,11 +888,38 @@ class DeepgramVoiceAgentService {
       _emitStatus('Executing $name');
 
       try {
+        if (name == 'sleep_agent') {
+          await onSessionEndRequested?.call();
+          return;
+        }
         final result = await ToolExecutor.execute(
           tool: name,
-          arguments: arguments,
+          arguments: name == 'read_messages'
+              ? resolveMessageReadArguments(_lastUserCommand, arguments)
+              : arguments,
+          onLocalReadout: (message) async {
+            if (generation != _connectionGeneration ||
+                !isConnected ||
+                _cancelledFunctionIds.contains(id)) {
+              throw StateError('Message readout cancelled.');
+            }
+            await _interruptAgentAudio();
+            if (generation != _connectionGeneration ||
+                !isConnected ||
+                _cancelledFunctionIds.contains(id)) {
+              throw StateError('Message readout cancelled.');
+            }
+            setMicrophoneMuted(true);
+            _setState(DeepgramVoiceAgentState.speaking);
+            onLocalReadout?.call(message);
+          },
         );
+        if (name == 'read_messages' || name == 'check_messages') {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          setMicrophoneMuted(false);
+        }
 
+        if (generation != _connectionGeneration || !isConnected) return;
         if (_cancelledFunctionIds.contains(id)) continue;
 
         _sendJson(<String, dynamic>{
@@ -901,6 +945,10 @@ class DeepgramVoiceAgentService {
         });
         debugPrint('Function $name failed: $error');
       } finally {
+        if (name == 'read_messages' || name == 'check_messages') {
+          setMicrophoneMuted(false);
+          onLocalReadoutFinished?.call();
+        }
         _activeFunctionIds.remove(id);
       }
     }
@@ -922,6 +970,8 @@ class DeepgramVoiceAgentService {
   }
 
   Map<String, dynamic> _functionResultContent(ToolExecutionResult result) {
+    final localReadout = notificationResultForAgent(result);
+    if (localReadout != null) return localReadout;
     switch (result.status) {
       case ToolExecutionStatus.completed:
         return <String, dynamic>{
@@ -952,6 +1002,13 @@ class DeepgramVoiceAgentService {
           'status': 'error',
           'message': result.message,
         };
+
+      case ToolExecutionStatus.needsInput:
+        return <String, dynamic>{
+          'success': false,
+          'status': 'needs_input',
+          'message': result.message,
+        };
     }
   }
 
@@ -964,6 +1021,9 @@ class DeepgramVoiceAgentService {
       final id = raw['id']?.toString();
       if (id == null || id.isEmpty) continue;
       _cancelledFunctionIds.add(id);
+      if (_activeFunctionIds.contains(id)) {
+        unawaited(MessageNotificationService.stopReadout().catchError((_) {}));
+      }
       debugPrint('Function cancelled: $id');
     }
 
@@ -1224,7 +1284,12 @@ Never claim a device action succeeded until the function result says it succeede
 If a function returns an error, explain it briefly.
 If it returns multiple contact matches, ask the user which contact they mean.
 For messaging, preserve the exact requested message text. If the user did not specify WhatsApp or Messages, ask which one they want before calling send_message. Never claim the message was sent; say the composer is ready because the user must tap Send.
-open_app supports AI Agent, YouTube, Spotify, WhatsApp, Chrome, Instagram, PUBG or BGMI, Zomato, Swiggy, Zepto, Blinkit, Messages, Gallery or Photos, Settings, Camera, Gmail or Email, Maps, Groww, and Bajaj Broking.
+open_app can discover any installed launchable app by its name. Do not restrict requests to a fixed app list. If it returns needs_input, ask the exact clarification question and retry open_app with the chosen full name or package name.
+Use set_torch for the flashlight, control_volume for volume, set_brightness for brightness, and get_battery for real battery status. Never guess device state. If a permission is missing, relay the function result's instructions.
+Use sleep_agent to dismiss the assistant on Sleep, Exit, or a request to close this assistant. This does not mean restarting or shutting down the phone.
+Use read_messages to read available WhatsApp or SMS/RCS notification previews and check_messages to report new preview counts. Both tools speak locally using Android's on-device voice and return only status; you never receive notification contents. Do not invent or repeat the readout. Default channel is all; use whatsapp or messages when requested, and sender for a named sender or conversation. Default unread_only=true means not yet spoken by this assistant; use false only when asked to repeat. For read more, keep it true. These tools do not expose a complete unread inbox. If spoken_locally=true and status=needs_input, wait for the user's clarification.
+For read-more/repeat follow-ups, preserve the channel and sender from the most recent message request unless the user changes them.
+For repeat, saved, already-read, or all-message requests, use read_all=true and unread_only=false. For all unread/new messages, use read_all=true and unread_only=true. Saved captured previews can be replayed even after notifications are dismissed, within the local cache retention window.
 
 GENERAL ASSISTANCE:
 Answer general knowledge questions, definitions, jokes, casual conversation, explanations, and everyday requests directly.

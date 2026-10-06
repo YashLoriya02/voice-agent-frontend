@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 
 import '../models/contact_match.dart';
+import '../models/installed_app.dart';
 
 class DeviceActionService {
   static const MethodChannel _channel = MethodChannel(
@@ -39,12 +40,33 @@ class DeviceActionService {
   }) async {
     await _channel.invokeMethod<void>('openAppTarget', {
       'packageNames': packageNames,
-      if (systemTarget != null) 'systemTarget': systemTarget,
+      'systemTarget': ?systemTarget,
     });
   }
 
   static Future<void> openAgentApp() async {
     await _channel.invokeMethod<void>('openAgentApp');
+  }
+
+  static Future<void> closeAssistant() =>
+      _channel.invokeMethod<void>('closeAssistant');
+
+  static Future<List<InstalledApp>> getLaunchableApps() async {
+    final apps =
+        await _channel.invokeMethod<List<dynamic>>('getLaunchableApps') ?? [];
+    return apps.map((app) => InstalledApp.fromMap(app as Map)).toList();
+  }
+
+  static Future<Map<String, dynamic>> deviceControl(
+    String method,
+    Map<String, dynamic> arguments,
+  ) async {
+    final result = await _channel.invokeMapMethod<String, dynamic>(
+      method,
+      arguments,
+    );
+    if (result == null) throw StateError('No device control result.');
+    return result;
   }
 
   /// Opens a pre-filled composer. The user still reviews and taps Send.
