@@ -206,6 +206,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
     _wakeWord = WakeWordService(
       onDetected: _handleWakeWordDetected,
+      onDismiss: _closeAssistantSession,
       onStateChanged: (state, message) {
         debugPrint(
           '[WakeWord/UI] state=${state.name}, message=${message ?? "<none>"}',

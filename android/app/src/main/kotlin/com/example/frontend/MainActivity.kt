@@ -48,6 +48,27 @@ open class MainActivity : FlutterActivity() {
         MethodChannel.Result? = null
 
     private var wakeWordChannel: MethodChannel? = null
+    private var assistantHostClosing = false
+    private val assistantCloseHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val finishAssistantHost = Runnable { if (!isDestroyed) finish() }
+
+    internal fun requestAssistantHostDismissal() {
+        if (assistantHostClosing || isFinishing || isDestroyed) return
+        assistantHostClosing = true
+        // Ask Flutter to stop STT, local readout and provider audio before
+        // destroying its engine. Re-arm wake recording after host teardown.
+        assistantCloseHandler.postDelayed(finishAssistantHost, 2_500L)
+        val channel = wakeWordChannel
+        if (channel == null) {
+            finishAssistantHost.run()
+            return
+        }
+        channel.invokeMethod("dismiss", null, object : MethodChannel.Result {
+            override fun success(result: Any?) { finishAssistantHost.run() }
+            override fun error(code: String, message: String?, details: Any?) { finishAssistantHost.run() }
+            override fun notImplemented() { finishAssistantHost.run() }
+        })
+    }
 
     private val wakeWordListener: (String, Map<String, Any?>) -> Unit =
         { method, arguments ->
@@ -333,7 +354,9 @@ open class MainActivity : FlutterActivity() {
                     }
 
                     "stop" -> {
-                        WakeWordRuntime.stop()
+                        if (!assistantHostClosing && !isFinishing && !isDestroyed) {
+                            WakeWordRuntime.stop()
+                        }
                         result.success(true)
                     }
 
@@ -400,7 +423,7 @@ open class MainActivity : FlutterActivity() {
                         ) {
                             AgentVoiceInteractionService.startSelectedListener(this)
                             WakeWordRuntime.start(this)
-                        } else if (!canListen) {
+                        } else if (!canListen && !assistantHostClosing && !isFinishing && !isDestroyed) {
                             WakeWordRuntime.stop()
                         }
                         result.success(true)
@@ -414,7 +437,7 @@ open class MainActivity : FlutterActivity() {
                             isAssistantRoleHeld() &&
                             AssistantPreferences.isWakeEnabled(this)
                         ) {
-                            AgentVoiceInteractionService.startSelectedListener(this)
+                            AgentVoiceInteractionService.scheduleSelectedListener(this)
                         } else {
                             WakeWordRuntime.stop()
                         }
@@ -1110,6 +1133,8 @@ private fun normalizeContactName(
 }
 
 override fun onDestroy() {
+    assistantHostClosing = true
+    assistantCloseHandler.removeCallbacksAndMessages(null)
     installedMaps.dispose()
     gmail.dispose()
     messageNotifications.dispose()
@@ -1118,14 +1143,14 @@ override fun onDestroy() {
     wakeWordChannel = null
     WakeWordRuntime.removeListener(wakeWordListener)
 
+    super.onDestroy()
     if (
         isAssistantRoleHeld() &&
         AssistantPreferences.isWakeEnabled(this)
     ) {
-        AgentVoiceInteractionService.startSelectedListener(this)
+        AgentVoiceInteractionService.scheduleSelectedListener(this)
     } else {
         WakeWordRuntime.stop()
     }
-    super.onDestroy()
 }
 }

@@ -11,4 +11,5 @@ object AssistantActivationStore {
     }
 
     fun consume(): Boolean = pending.getAndSet(false)
+    fun clear() { pending.set(false) }
 }

@@ -44,6 +44,8 @@ class AgentVoiceInteractionSession(context: Context) :
     private var ttsReady = false
     private var greetingPending = false
     private var launched = false
+    private var sessionGeneration = 0L
+    private var greetingId: String? = null
     private var nudgeView: HeyAgentNudgeView? = null
     private var overlay: AssistantOverlayView? = null
 
@@ -60,6 +62,7 @@ class AgentVoiceInteractionSession(context: Context) :
                     object : UtteranceProgressListener() {
                         override fun onStart(utteranceId: String?) {
                             mainHandler.post {
+                                if (!isCurrentGreeting(utteranceId)) return@post
                                 nudgeView?.updateCopy(
                                     subtitle = "HELLO",
                                     status = "How can I help?",
@@ -69,6 +72,8 @@ class AgentVoiceInteractionSession(context: Context) :
 
                         override fun onDone(utteranceId: String?) {
                             mainHandler.post {
+                                if (!isCurrentGreeting(utteranceId)) return@post
+                                val generation = sessionGeneration
                                 val provider =
                                     if (
                                         AssistantPreferences.preferredProvider(sessionContext) ==
@@ -83,7 +88,7 @@ class AgentVoiceInteractionSession(context: Context) :
                                     status = provider,
                                 )
                                 mainHandler.postDelayed(
-                                    { startBackgroundFlutterAgent() },
+                                    { startBackgroundFlutterAgent(generation) },
                                     POST_GREETING_DELAY_MS,
                                 )
                             }
@@ -91,11 +96,15 @@ class AgentVoiceInteractionSession(context: Context) :
 
                         @Deprecated("Deprecated by Android")
                         override fun onError(utteranceId: String?) {
-                            mainHandler.post { startBackgroundFlutterAgent() }
+                            mainHandler.post {
+                                if (isCurrentGreeting(utteranceId)) startBackgroundFlutterAgent()
+                            }
                         }
 
                         override fun onError(utteranceId: String?, errorCode: Int) {
-                            mainHandler.post { startBackgroundFlutterAgent() }
+                            mainHandler.post {
+                                if (isCurrentGreeting(utteranceId)) startBackgroundFlutterAgent()
+                            }
                         }
                     },
                 )
@@ -127,6 +136,11 @@ class AgentVoiceInteractionSession(context: Context) :
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        activeSession = this
+        mainHandler.removeCallbacksAndMessages(null)
+        sessionGeneration = WakeWordRuntime.assistantSessionOpened()
+        val generation = sessionGeneration
+        greetingId = null
         getWindow().window?.apply {
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -143,29 +157,43 @@ class AgentVoiceInteractionSession(context: Context) :
         // Never leave the assistant card stuck if a device TTS engine fails to
         // initialize or omits its completion callback.
         mainHandler.postDelayed(
-            { if (!launched) startBackgroundFlutterAgent() },
+            { startBackgroundFlutterAgent(generation) },
             TTS_FALLBACK_TIMEOUT_MS,
         )
     }
 
     override fun onHide() {
+        mainHandler.removeCallbacksAndMessages(null)
+        greetingPending = false
+        greetingId = null
         overlay?.setActive(false)
         textToSpeech?.stop()
-        AssistantHostActivity.finishActive()
+        if (WakeWordRuntime.isCurrentAssistantSession(sessionGeneration)) {
+            AssistantActivationStore.clear()
+            AssistantHostActivity.finishActive()
+        }
         super.onHide()
+        WakeWordRuntime.assistantSessionClosed(sessionContext, sessionGeneration)
     }
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        greetingPending = false
+        greetingId = null
+        if (WakeWordRuntime.isCurrentAssistantSession(sessionGeneration)) {
+            AssistantActivationStore.clear()
+            AssistantHostActivity.finishActive()
+        }
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null
         if (activeSession === this) activeSession = null
         super.onDestroy()
+        WakeWordRuntime.assistantSessionClosed(sessionContext, sessionGeneration)
     }
 
     private fun speakGreeting() {
-        if (!greetingPending) return
+        if (!greetingPending || !WakeWordRuntime.isCurrentAssistantSession(sessionGeneration)) return
         if (!ttsReady) {
             if (textToSpeech == null) startBackgroundFlutterAgent()
             return
@@ -173,6 +201,7 @@ class AgentVoiceInteractionSession(context: Context) :
 
         greetingPending = false
         val utteranceId = "hey-agent-${UUID.randomUUID()}"
+        greetingId = utteranceId
         val result = textToSpeech?.speak(
             GREETING,
             TextToSpeech.QUEUE_FLUSH,
@@ -185,8 +214,12 @@ class AgentVoiceInteractionSession(context: Context) :
         }
     }
 
-    private fun startBackgroundFlutterAgent() {
-        if (launched) return
+    private fun isCurrentGreeting(utteranceId: String?): Boolean =
+        utteranceId != null && utteranceId == greetingId &&
+            WakeWordRuntime.isCurrentAssistantSession(sessionGeneration)
+
+    private fun startBackgroundFlutterAgent(generation: Long = sessionGeneration) {
+        if (launched || !WakeWordRuntime.isCurrentAssistantSession(generation)) return
         launched = true
         AssistantActivationStore.markPending()
 

@@ -26,7 +26,11 @@ typedef WakeWordStateCallback = void Function(
 /// its AudioRecord before sending the detection callback, so Groq or Deepgram
 /// can safely acquire the microphone for the actual conversation.
 class WakeWordService {
-  WakeWordService({required this.onDetected, this.onStateChanged});
+  WakeWordService({
+    required this.onDetected,
+    this.onStateChanged,
+    this.onDismiss,
+  });
 
   static const MethodChannel _channel = MethodChannel(
     'com.infiheal.voice_agent/wake_word',
@@ -34,6 +38,7 @@ class WakeWordService {
 
   final WakeWordDetectedCallback onDetected;
   final WakeWordStateCallback? onStateChanged;
+  final Future<void> Function()? onDismiss;
 
   WakeWordState _state = WakeWordState.uninitialized;
   Future<void> _operationChain = Future<void>.value();
@@ -170,7 +175,7 @@ class WakeWordService {
   }
 
   /// Opens the same native bottom nudge used by the Android system assistant.
-  /// The caller only exposes this action in Flutter debug builds.
+  /// Available from the assistant Settings page.
   Future<bool> previewAssistantUi() async {
     if (_disposed || !Platform.isAndroid) return false;
     try {
@@ -271,6 +276,10 @@ class WakeWordService {
       case 'activation':
         _log('System assistant greeting finished; activating Flutter agent.');
         await _dispatchDetection(fromSystemAssistant: true);
+        break;
+
+      case 'dismiss':
+        await onDismiss?.call();
         break;
 
       default:

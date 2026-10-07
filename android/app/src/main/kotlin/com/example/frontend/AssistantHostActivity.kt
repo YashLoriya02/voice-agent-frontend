@@ -18,13 +18,14 @@ class AssistantHostActivity : MainActivity() {
             val activity = activeActivity?.get() ?: return
             activity.runOnUiThread {
                 if (!activity.isFinishing && !activity.isDestroyed) {
-                    activity.finish()
+                    activity.requestAssistantHostDismissal()
                 }
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        WakeWordRuntime.assistantHostOpened(this)
         super.onCreate(savedInstanceState)
         activeActivity = WeakReference(this)
     }
@@ -44,5 +45,6 @@ class AssistantHostActivity : MainActivity() {
             activeActivity = null
         }
         super.onDestroy()
+        WakeWordRuntime.assistantHostClosed(this, this)
     }
 }

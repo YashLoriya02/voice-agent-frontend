@@ -37,9 +37,19 @@ class AgentVoiceInteractionService : VoiceInteractionService() {
             instance.startWakeWordIfAllowed()
             return true
         }
+
+        fun scheduleSelectedListener(context: Context) {
+            val instance = activeInstance ?: return
+            if (!isSelected(context)) return
+            instance.mainHandler.removeCallbacks(instance.restartListener)
+            // Flutter recorder cleanup and activity lifecycle callbacks finish
+            // before the system assistant reacquires AudioRecord.
+            instance.mainHandler.postDelayed(instance.restartListener, 500L)
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val restartListener = Runnable { startWakeWordIfAllowed() }
 
     private val wakeListener: (String, Map<String, Any?>) -> Unit =
         { method, arguments ->
@@ -58,6 +68,7 @@ class AgentVoiceInteractionService : VoiceInteractionService() {
     }
 
     override fun onShutdown() {
+        mainHandler.removeCallbacksAndMessages(null)
         Log.i(TAG, "Assistant role is shutting down.")
         if (activeInstance === this) activeInstance = null
         WakeWordRuntime.removeListener(wakeListener)
@@ -66,12 +77,17 @@ class AgentVoiceInteractionService : VoiceInteractionService() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         if (activeInstance === this) activeInstance = null
         WakeWordRuntime.removeListener(wakeListener)
         super.onDestroy()
     }
 
     fun startWakeWordIfAllowed() {
+        if (!WakeWordRuntime.canListenAfterAssistant) {
+            Log.i(TAG, "Wake restart deferred until the assistant host releases the microphone.")
+            return
+        }
         if (!AssistantPreferences.isWakeEnabled(this)) {
             Log.i(TAG, "Wake word is disabled by the user.")
             WakeWordRuntime.stop()

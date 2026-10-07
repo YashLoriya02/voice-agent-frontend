@@ -9,6 +9,31 @@ import java.util.concurrent.CopyOnWriteArraySet
  * and two simultaneous model-unpack operations.
  */
 object WakeWordRuntime {
+    private val assistantLifecycle = AssistantWakeLifecycle()
+    val canListenAfterAssistant: Boolean get() = assistantLifecycle.canListen
+
+    fun assistantSessionOpened(): Long {
+        val generation = assistantLifecycle.sessionOpened()
+        stop()
+        return generation
+    }
+
+    fun isCurrentAssistantSession(generation: Long): Boolean =
+        assistantLifecycle.isCurrentSession(generation)
+
+    fun assistantSessionClosed(context: Context, generation: Long) {
+        if (assistantLifecycle.sessionClosed(generation)) {
+            AgentVoiceInteractionService.scheduleSelectedListener(context)
+        }
+    }
+
+    fun assistantHostOpened(host: Any) { assistantLifecycle.hostOpened(host) }
+
+    fun assistantHostClosed(context: Context, host: Any) {
+        assistantLifecycle.hostClosed(host)
+        AgentVoiceInteractionService.scheduleSelectedListener(context)
+    }
+
     private val listeners =
         CopyOnWriteArraySet<(String, Map<String, Any?>) -> Unit>()
 
@@ -42,6 +67,7 @@ object WakeWordRuntime {
     }
 
     fun start(context: Context) {
+        if (!canListenAfterAssistant) return
         manager(context).start()
     }
 
