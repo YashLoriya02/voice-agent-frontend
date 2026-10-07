@@ -1,5 +1,74 @@
 const List<Map<String, dynamic>> deviceToolDefinitions = [
   {
+    'name': 'read_gmail',
+    'description': 'Read Gmail inbox sender, subject and preview ON THE PHONE with private on-device speech. Defaults to real Gmail unread mail; does not mark mail read. Use repeat_last=true to repeat the last local email list. No email contents appear in the remote function response.',
+    'parameters': {
+      'type': 'object',
+      'properties': {
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10},
+        'sender': {
+          'type': 'string',
+          'description':
+              'Sender name or email explicitly requested by the user.',
+        },
+        'unread_only': {
+          'type': 'boolean',
+          'description':
+              'Defaults true. False includes already-read inbox emails.',
+        },
+        'repeat_last': {
+          'type': 'boolean',
+          'description':
+              'Repeat the previous local mail readout. Defaults false.',
+        },
+      },
+      'required': <String>[],
+      'additionalProperties': false,
+    },
+    'defer_until_eot': true,
+  },
+  {
+    'name': 'check_gmail',
+    'description': 'Fetch and speak the actual Gmail INBOX unread email count ON THE PHONE. The remote response only confirms completion. Never guess mail counts.',
+    'parameters': {
+      'type': 'object',
+      'properties': {},
+      'required': <String>[],
+      'additionalProperties': false,
+    },
+    'defer_until_eot': true,
+  },
+  {
+    'name': 'get_driving_route',
+    'description': 'Use installed Google Maps from its own current-location origin; never ask the user for current coordinates/location. For distance/time questions open driving directions and read displayed estimates. For navigate/take me/drive to requests use start_navigation=true to launch navigation. No paid Maps APIs. Ask only for a missing destination. Use read_current=true for a displayed driving route; choice selects a displayed route number. Screen-reading needs Maps-only accessibility; opening/navigation does not.',
+    'parameters': {
+      'type': 'object',
+      'properties': {
+        'destination': {
+          'type': 'string',
+          'description': 'Requested place name, area, city or address; preserve the previous destination for a numbered-choice follow-up.',
+        },
+        'choice': {
+          'type': 'integer',
+          'minimum': 1,
+          'maximum': 3,
+          'description': 'Only when selecting a route number from the last displayed Maps route choices.',
+        },
+        'read_current': {
+          'type': 'boolean',
+          'description': 'True when asked to read the already displayed Google Maps driving route; do not open new directions. Default false.',
+        },
+        'start_navigation': {
+          'type': 'boolean',
+          'description': 'True only for an explicit request to navigate, drive or take me to a destination. Opens Maps navigation using its current location. Default false for distance/time estimates.',
+        },
+      },
+      'required': <String>[],
+      'additionalProperties': false,
+    },
+    'defer_until_eot': true,
+  },
+  {
     'name': 'read_messages',
     'description': 'Read captured WhatsApp or SMS/RCS notification previews aloud ON THE PHONE. Defaults to previews not yet spoken. Set unread_only=false for repeat, saved, already-read, or all messages. Set read_all=true to read all matching saved previews in speech batches. These are captured previews, not the complete source inbox. Contents never appear in the remote response.',
     'parameters': messageQueryParameters,

@@ -10,7 +10,9 @@ Map<String, dynamic>? notificationResultForAgent(ToolExecutionResult result) {
     'status': needsInput ? 'needs_input' : 'completed',
     'spoken_locally': result.spokenLocally,
     'message': needsInput
-        ? 'A clarification was spoken on the phone. Wait for the user to specify the full sender or conversation name.'
-        : 'The notification readout was completed on the phone. Do not repeat it.',
+        ? result.messageReadout?.channel == 'maps'
+              ? 'A Maps route clarification was spoken on the phone. Wait for the user to choose a displayed route number.'
+              : 'A clarification was spoken on the phone. Wait for the user to specify the full sender or conversation name.'
+        : 'The private readout was completed on the phone. Do not repeat it.',
   };
 }

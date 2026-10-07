@@ -51,6 +51,33 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('Settings replaces setup popups on a phone-sized screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const MyApp());
+    await tester.pump();
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('SETTINGS'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.tap(find.widgetWithText(ActionChip, 'Gmail'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Connect Gmail'), findsOneWidget);
+    expect(
+      find.textContaining('Navigate with installed Google Maps.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('Back to agent'));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('message access setup works on a phone-sized screen', (
     tester,
   ) async {
@@ -61,12 +88,11 @@ void main() {
     await tester.pumpWidget(const MyApp());
     await tester.pump();
     expect(tester.takeException(), isNull);
-    await tester.tap(find.byTooltip('Message access'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Message access'), findsOneWidget);
-    expect(find.textContaining('on-device voice'), findsOneWidget);
-    await tester.tap(find.text('Open settings'));
+    await tester.ensureVisible(find.text('Manage access'));
+    await tester.tap(find.text('Manage access'));
     await tester.pump();
     expect(settingsOpened, isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -83,8 +109,9 @@ void main() {
       var historyRequested = false;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(actionsChannel, (call) async {
-            if (call.method == 'messageNotificationStatus')
+            if (call.method == 'messageNotificationStatus') {
               return {'enabled': true, 'connected': true};
+            }
             if (call.method == 'getMessageNotifications') {
               historyRequested = call.arguments['includeHistory'] == true;
               return {
@@ -120,9 +147,10 @@ void main() {
         RepaintBoundary(key: previewKey, child: const MyApp()),
       );
       await tester.pump();
-      await tester.tap(find.byTooltip('Message access'));
+      await tester.tap(find.byTooltip('Settings'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      await tester.ensureVisible(find.text('Read all saved'));
       await tester.tap(find.text('Read all saved'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));

@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:frontend/voice_agent/screens/voice_agent_screen.dart';
 
+import 'voice_agent/theme/agent_theme.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -14,10 +16,7 @@ void main() {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({
-    super.key,
-    this.backgroundAssistant = false,
-  });
+  const MyApp({super.key, this.backgroundAssistant = false});
 
   final bool backgroundAssistant;
 
@@ -25,6 +24,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      theme: AgentTheme.dark,
       color: Colors.transparent,
       home: VoiceAgentScreen(backgroundAssistant: backgroundAssistant),
     );

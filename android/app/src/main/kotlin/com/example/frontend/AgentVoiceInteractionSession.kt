@@ -9,10 +9,10 @@ import android.os.Looper
 import android.service.voice.VoiceInteractionSession
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.view.Gravity
+import android.graphics.drawable.ColorDrawable
+import android.view.WindowManager
 import android.view.View
 import android.view.ViewGroup
-import android.widget.LinearLayout
 import java.util.Locale
 import java.util.UUID
 
@@ -32,6 +32,10 @@ class AgentVoiceInteractionSession(context: Context) :
             val session = activeSession ?: return
             session.mainHandler.post { session.hide() }
         }
+        fun updateActiveState(phase: String, caption: String) {
+            val session = activeSession ?: return
+            session.mainHandler.post { session.overlay?.updateState(phase, caption) }
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -41,6 +45,7 @@ class AgentVoiceInteractionSession(context: Context) :
     private var greetingPending = false
     private var launched = false
     private var nudgeView: HeyAgentNudgeView? = null
+    private var overlay: AssistantOverlayView? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -56,8 +61,8 @@ class AgentVoiceInteractionSession(context: Context) :
                         override fun onStart(utteranceId: String?) {
                             mainHandler.post {
                                 nudgeView?.updateCopy(
-                                    subtitle = "HOW MAY I HELP?",
-                                    status = "VOICE LINK ACTIVE",
+                                    subtitle = "HELLO",
+                                    status = "How can I help?",
                                 )
                             }
                         }
@@ -69,13 +74,13 @@ class AgentVoiceInteractionSession(context: Context) :
                                         AssistantPreferences.preferredProvider(sessionContext) ==
                                         "deepgramVoiceAgent"
                                     ) {
-                                        "CONNECTING DEEPGRAM"
+                                        "DEEPGRAM VOICE"
                                     } else {
-                                        "CONNECTING GROQ"
+                                        "CUSTOM VOICE"
                                     }
                                 nudgeView?.updateCopy(
-                                    subtitle = provider,
-                                    status = "SECURE HANDOFF IN PROGRESS",
+                                    subtitle = "GETTING READY",
+                                    status = provider,
                                 )
                                 mainHandler.postDelayed(
                                     { startBackgroundFlutterAgent() },
@@ -101,29 +106,37 @@ class AgentVoiceInteractionSession(context: Context) :
     }
 
     override fun onCreateContentView(): View {
-        val card = HeyAgentNudgeView(sessionContext).apply {
-            updateCopy("INITIALIZING VOICE LINK", "NEURAL CORE ONLINE")
-        }
-        nudgeView = card
+        val root = AssistantOverlayView(sessionContext, onDismiss = { hide() })
+        overlay = root
+        nudgeView = root.panel
+        root.panel.updateCopy("GETTING READY", "How can I help?")
+        return root
+    }
 
-        return LinearLayout(sessionContext).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            setPadding(dp(18), dp(18), dp(18), dp(34))
-            setBackgroundColor(Color.TRANSPARENT)
-            addView(
-                card,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    bottomMargin = dp(14)
-                },
-            )
+    override fun onComputeInsets(outInsets: Insets) {
+        val root = overlay
+        outInsets.contentInsets.set(0, root?.height ?: 0, 0, 0)
+        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+        outInsets.touchableRegion.setEmpty()
+        root?.panel?.let { panel ->
+            val position = IntArray(2)
+            panel.getLocationInWindow(position)
+            outInsets.touchableRegion.set(position[0], position[1], position[0] + panel.width, position[1] + panel.height)
         }
     }
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        getWindow().window?.apply {
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(this, false)
+            if (android.os.Build.VERSION.SDK_INT >= 28) attributes = attributes.apply { layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES }
+        }
+        overlay?.setActive(true)
+        overlay?.updateState("idle", "How can I help?")
         launched = false
         greetingPending = true
         speakGreeting()
@@ -136,6 +149,7 @@ class AgentVoiceInteractionSession(context: Context) :
     }
 
     override fun onHide() {
+        overlay?.setActive(false)
         textToSpeech?.stop()
         AssistantHostActivity.finishActive()
         super.onHide()
@@ -195,7 +209,4 @@ class AgentVoiceInteractionSession(context: Context) :
         }
     }
 
-    private fun dp(value: Int): Int {
-        return (value * sessionContext.resources.displayMetrics.density).toInt()
-    }
 }

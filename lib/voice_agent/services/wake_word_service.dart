@@ -26,10 +26,7 @@ typedef WakeWordStateCallback = void Function(
 /// its AudioRecord before sending the detection callback, so Groq or Deepgram
 /// can safely acquire the microphone for the actual conversation.
 class WakeWordService {
-  WakeWordService({
-    required this.onDetected,
-    this.onStateChanged,
-  });
+  WakeWordService({required this.onDetected, this.onStateChanged});
 
   static const MethodChannel _channel = MethodChannel(
     'com.infiheal.voice_agent/wake_word',
@@ -77,7 +74,8 @@ class WakeWordService {
       await refreshAssistantStatus();
 
       final pendingActivation =
-          await _channel.invokeMethod<bool>('consumePendingActivation') ?? false;
+          await _channel.invokeMethod<bool>('consumePendingActivation') ??
+          false;
       if (pendingActivation) {
         scheduleMicrotask(() => _dispatchDetection(fromSystemAssistant: true));
       }
@@ -146,6 +144,18 @@ class WakeWordService {
     }
   }
 
+  Future<void> updateAssistantUi(String phase, String caption) async {
+    if (_disposed || !Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('updateAssistantUi', {
+        'phase': phase,
+        'caption': caption,
+      });
+    } on PlatformException catch (_) {
+      // Visual state must not interrupt the active voice command.
+    }
+  }
+
   Future<bool> requestAssistantRole() async {
     if (_disposed || !Platform.isAndroid) return false;
     try {
@@ -185,10 +195,9 @@ class WakeWordService {
   Future<void> setPreferredProvider(String provider) async {
     if (_disposed || !Platform.isAndroid) return;
     try {
-      await _channel.invokeMethod<void>(
-        'setPreferredProvider',
-        {'provider': provider},
-      );
+      await _channel.invokeMethod<void>('setPreferredProvider', {
+        'provider': provider,
+      });
     } on PlatformException catch (error) {
       _log('Preferred provider save failed: ${error.code}: ${error.message}');
     }
@@ -197,10 +206,9 @@ class WakeWordService {
   Future<void> handoffToBackground({required bool canListen}) async {
     if (_disposed || !Platform.isAndroid || !_assistantRoleHeld) return;
     try {
-      await _channel.invokeMethod<void>(
-        'backgroundHandoff',
-        {'canListen': canListen},
-      );
+      await _channel.invokeMethod<void>('backgroundHandoff', {
+        'canListen': canListen,
+      });
     } on PlatformException catch (error) {
       _log('Background handoff failed: ${error.code}: ${error.message}');
     }

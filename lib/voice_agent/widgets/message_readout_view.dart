@@ -65,6 +65,16 @@ class MessageReadoutView extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
+                    if (readout.messages[i].subject.isNotEmpty) ...[
+                      Text(
+                        readout.messages[i].subject,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     Text(
                       readout.messages[i].body,
                       style: const TextStyle(
@@ -91,7 +101,9 @@ class MessageReadoutView extends StatelessWidget {
       OutlinedButton.icon(
         onPressed: onReadAllAgain,
         icon: const Icon(Icons.replay_rounded, size: 18),
-        label: const Text('Read all again'),
+        label: Text(
+          readout.channel == 'maps' ? 'Read displayed route' : 'Read all again',
+        ),
       ),
     ],
   );

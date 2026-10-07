@@ -5,6 +5,7 @@ class NotificationMessage {
     required this.body,
     required this.appName,
     this.conversation = '',
+    this.subject = '',
   });
 
   final String id;
@@ -12,6 +13,7 @@ class NotificationMessage {
   final String body;
   final String appName;
   final String conversation;
+  final String subject;
 
   factory NotificationMessage.fromMap(Map<String, dynamic> row) =>
       NotificationMessage(
@@ -20,6 +22,7 @@ class NotificationMessage {
         body: row['body'].toString(),
         appName: row['appName'].toString(),
         conversation: row['conversation']?.toString() ?? '',
+        subject: row['subject']?.toString() ?? '',
       );
 
   String get senderLabel => conversation.isEmpty || conversation == sender
@@ -32,7 +35,7 @@ class NotificationMessage {
     final preview = shortened
         ? '${String.fromCharCodes(normalized.runes.take(240))}…'
         : normalized;
-    return '$appName, $senderLabel: $preview${shortened ? ' Preview shortened.' : ''}';
+    return '$appName, $senderLabel: ${subject.isEmpty ? '' : '${String.fromCharCodes(subject.runes.take(250))}. '}$preview${shortened ? ' Preview shortened.' : ''}';
   }
 }
 
@@ -54,14 +57,18 @@ class MessageReadout {
   String get displayText => [
     intro,
     for (var i = 0; i < messages.length; i++)
-      '${i + 1}. ${messages[i].senderLabel}: ${messages[i].body}',
+      '${i + 1}. ${messages[i].senderLabel}: ${messages[i].subject.isEmpty ? '' : '${messages[i].subject}\n'}${messages[i].body}',
     if (footer.isNotEmpty) footer,
   ].join('\n\n');
 
-  Map<String, dynamic> get replayArguments => {
-    'channel': channel,
-    if (sender != null && sender!.isNotEmpty) 'sender': sender,
-    'unread_only': false,
-    'read_all': true,
-  };
+  Map<String, dynamic> get replayArguments => channel == 'maps'
+      ? {'read_current': true}
+      : channel == 'gmail'
+      ? {'repeat_last': true}
+      : {
+          'channel': channel,
+          if (sender != null && sender!.isNotEmpty) 'sender': sender,
+          'unread_only': false,
+          'read_all': true,
+        };
 }

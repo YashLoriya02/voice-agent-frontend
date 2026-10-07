@@ -4,6 +4,8 @@ import '../models/message_readout.dart';
 import '../models/tool_execution_result.dart';
 import '../services/device_action_service.dart';
 import '../services/message_notification_service.dart';
+import '../services/gmail_service.dart';
+import '../services/maps_service.dart';
 import 'app_registry.dart';
 
 typedef BeforeActionCallback = Future<void> Function(String message);
@@ -19,6 +21,18 @@ class ToolExecutor {
   }) async {
     try {
       switch (tool) {
+        case 'get_driving_route':
+          return await MapsService.execute(
+            arguments,
+            onLocalReadout: onLocalReadout,
+          );
+        case 'read_gmail':
+        case 'check_gmail':
+          return await GmailService.execute(
+            arguments,
+            readAloud: tool == 'read_gmail',
+            onLocalReadout: onLocalReadout,
+          );
         case 'read_messages':
           return await MessageNotificationService.execute(
             arguments,

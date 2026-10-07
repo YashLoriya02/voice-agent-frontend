@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,7 +9,10 @@ import '../models/contact_match.dart';
 import '../models/tool_execution_result.dart';
 import '../models/message_readout.dart';
 import '../widgets/message_readout_view.dart';
+import 'agent_settings_screen.dart';
 import '../tools/message_commands.dart';
+import '../tools/gmail_maps_commands.dart';
+import '../tools/private_readout_guard.dart';
 
 import '../services/agent_tts_service.dart';
 import '../services/deepgram_service.dart';
@@ -88,6 +90,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   bool _processing = false;
 
   bool _switchingProvider = false;
+  bool _settingsOpen = false;
+  String? _lastNativeUi;
 
   bool _voiceControlInProgress = false;
   bool _closingSession = false;
@@ -355,6 +359,12 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       return;
     }
 
+    // Preserve the private cards through the provider's generic completion.
+    // Never append their text into a response eligible for cloud TTS fallback.
+    if (transcript.isAssistant && _messageReadout != null) {
+      return;
+    }
+
     if (transcript.isUser) {
       if (isSessionExitCommand(transcript.content)) {
         unawaited(_closeAssistantSession());
@@ -376,6 +386,17 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
           _agentMessage = null;
         });
         unawaited(_executeProviderVoiceAction(transcript.content, voiceAction));
+        return;
+      }
+      final googleCommand = routeGmailMapsCommand(transcript.content);
+      if (googleCommand != null) {
+        unawaited(
+          _readSavedMessages(
+            googleCommand.arguments,
+            tool: googleCommand.tool!,
+            commandText: transcript.content,
+          ),
+        );
         return;
       }
     }
@@ -426,7 +447,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   void _scheduleDeepgramSpeechFallback({bool runSoon = false}) {
-    if (_localReadoutInProgress ||
+    if (_messageReadout != null ||
+        _localReadoutInProgress ||
         _provider != AgentProvider.deepgramVoiceAgent ||
         _deepgramNativeAudioStarted) {
       return;
@@ -446,7 +468,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   Future<void> _speakDeepgramFallback(int generation) async {
-    final completeMessage = _agentMessage?.trim() ?? '';
+    final completeMessage = cloudFallbackText(_agentMessage, _messageReadout);
     if (!mounted ||
         completeMessage.isEmpty ||
         _localReadoutInProgress ||
@@ -525,7 +547,8 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
   }
 
   bool get _voiceEngineBusy {
-    return _switchingProvider ||
+    return _settingsOpen ||
+        _switchingProvider ||
         _voiceControlInProgress ||
         _processing ||
         _deepgramVoiceAgent.isConnected ||
@@ -962,38 +985,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
             ),
           Switch.adaptive(
             value: _wakeWordEnabled,
-            activeColor: const Color(0xFF53E6B1),
+            activeThumbColor: const Color(0xFF53E6B1),
             onChanged: (value) => unawaited(_toggleWakeWord(value)),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _assistantPreviewButton() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 9, 22, 0),
-      child: SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: _previewAssistantUi,
-          icon: const Icon(Icons.visibility_rounded, size: 16),
-          label: const Text('PREVIEW HEY AGENT NUDGE'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF65D9FF),
-            side: const BorderSide(color: Color(0xFF194979)),
-            backgroundColor: const Color(0xB307111F),
-            padding: const EdgeInsets.symmetric(vertical: 11),
-            textStyle: const TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.1,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(13),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1221,6 +1216,7 @@ Complete the original request using the answer.
       final AgentResponse response = await VoiceAgentApiService.executeCommand(
         input,
         history: _conversationHistory,
+        commandText: command,
       );
 
       if (!_isCustomCommandActive(commandGeneration)) return;
@@ -1375,7 +1371,7 @@ Complete the original request using the answer.
           if (result.containsMessageData) {
             _rememberConversation(
               command,
-              'The requested notification readout completed on the phone.',
+              'The requested private readout completed on the phone.',
             );
           }
           if (result.speakResult) {
@@ -1434,7 +1430,9 @@ Complete the original request using the answer.
         case ToolExecutionStatus.needsInput:
           _pendingOriginalCommand ??= command;
           _pendingQuestion = result.containsMessageData
-              ? 'Which sender or conversation do you mean?'
+              ? result.messageReadout?.channel == 'maps'
+                    ? 'Which displayed route number should I read?'
+                    : 'Which sender or conversation do you mean?'
               : result.message;
           _rememberConversation(command, _pendingQuestion!);
           if (result.spokenLocally) {
@@ -1953,9 +1951,23 @@ Complete the original request using the answer.
   // UI
   // ============================================================
 
+  void _scheduleNativeAssistantUi() {
+    final signature = '${_state.name}|$_transcript';
+    if (_lastNativeUi == signature) return;
+    _lastNativeUi = signature;
+    final phase = _state.name;
+    final caption = _transcript.isEmpty ? 'How can I help?' : _transcript;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_closingSession) {
+        unawaited(_wakeWord.updateAssistantUi(phase, caption));
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.backgroundAssistant) {
+      _scheduleNativeAssistantUi();
       return const SizedBox.expand();
     }
 
@@ -1974,8 +1986,6 @@ Complete the original request using the answer.
                 _providerSelector(),
 
                 _wakeWordControl(),
-
-                if (kDebugMode) _assistantPreviewButton(),
 
                 Expanded(
                   child: SingleChildScrollView(
@@ -2074,7 +2084,11 @@ Complete the original request using the answer.
     );
   }
 
-  Future<void> _readSavedMessages(Map<String, dynamic> arguments) async {
+  Future<void> _readSavedMessages(
+    Map<String, dynamic> arguments, {
+    String tool = 'read_messages',
+    String? commandText,
+  }) async {
     if (_processing ||
         _localReadoutInProgress ||
         _switchingProvider ||
@@ -2093,11 +2107,20 @@ Complete the original request using the answer.
     _deepgramResponseGeneration++;
     setState(() {
       _state = VoiceUiState.thinking;
-      _transcript = 'Read all saved messages.';
+      _transcript =
+          commandText ??
+          (tool == 'read_gmail'
+              ? 'Read Gmail.'
+              : tool == 'get_driving_route'
+              ? 'Read the current Maps route.'
+              : 'Read all saved messages.');
       _agentMessage = null;
       _messageReadout = null;
     });
     try {
+      // Explicit Gmail/Maps voice commands own the action before the remote
+      // model can also issue a function request or a generic refusal.
+      if (commandText != null) await _deepgramVoiceAgent.disconnect();
       await _wakeWord.stop();
       await _deepgram.cancelListening();
       await _tts.stop();
@@ -2105,7 +2128,7 @@ Complete the original request using the answer.
       await _deepgramVoiceAgent.disconnect();
       if (!active()) return;
       final result = await ToolExecutor.execute(
-        tool: 'read_messages',
+        tool: tool,
         arguments: arguments,
         onLocalReadout: (readout) async {
           if (!active()) throw const VoiceAgentRequestCancelled();
@@ -2120,6 +2143,8 @@ Complete the original request using the answer.
       if (!active()) return;
       if (result.status == ToolExecutionStatus.error) {
         await _showAndSpeak(result.message, VoiceUiState.error);
+      } else if (tool == 'get_driving_route' && result.speakResult) {
+        await _showAndSpeak(result.message, VoiceUiState.success);
       } else {
         setState(() {
           _messageReadout = result.messageReadout;
@@ -2132,7 +2157,11 @@ Complete the original request using the answer.
     } catch (_) {
       if (active()) {
         await _showAndSpeak(
-          'I could not replay the saved messages.',
+          tool == 'read_gmail' || tool == 'check_gmail'
+              ? 'I could not complete the Gmail request. Try again or check Connect Gmail in settings.'
+              : tool == 'get_driving_route'
+              ? 'I could not complete the Maps request. Check that Google Maps is installed and try again.'
+              : 'I could not replay the saved messages.',
           VoiceUiState.error,
         );
       }
@@ -2146,71 +2175,45 @@ Complete the original request using the answer.
     }
   }
 
-  Future<void> _showMessageAccess() async {
+  Future<void> _openSettings() async {
+    if (_settingsOpen || _switchingProvider || _closingSession) return;
+    _settingsOpen = true;
+    SettingsReadRequest? request;
     try {
-      final status = await MessageNotificationService.status();
+      await _cancelCustomActivity();
+      await _deepgramVoiceAgent.disconnect();
+      await _wakeWord.stop();
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Message access'),
-          content: Text(
-            '${status['enabled'] == true ? (status['connected'] == true ? 'Notification access is ready.' : 'Access is enabled; the listener is connecting.') : 'Enable notification access for AI Voice Agent.'}\n\n'
-            'Read available WhatsApp and Messages notification previews by voice. New means not yet spoken by this assistant.\n\n'
-            'Previews stay on your phone and are read with an installed on-device voice. Your phone must be unlocked.\n\n'
-            'This does not read the complete inbox or change WhatsApp/SMS read status.',
+      setState(() => _state = VoiceUiState.idle);
+      request = await Navigator.of(context).push<SettingsReadRequest>(
+        MaterialPageRoute(
+          builder: (_) => AgentSettingsScreen(
+            provider: _provider.name,
+            wakeEnabled: _wakeWordEnabled,
+            isDefaultAssistant: _wakeWord.isSystemAssistant,
+            onProviderChanged: (name) => _switchProvider(
+              AgentProvider.values.byName(name),
+              restartWakeWord: false,
+            ),
+            onWakeChanged: _toggleWakeWord,
+            onMakeDefault: () async {
+              await _requestSystemAssistantRole();
+              return _wakeWord.isSystemAssistant;
+            },
+            onRefreshDefault: _wakeWord.refreshAssistantStatus,
+            onPreview: _previewAssistantUi,
           ),
-          actions: [
-            TextButton(
-              onPressed:
-                  _processing || _localReadoutInProgress || _switchingProvider
-                  ? null
-                  : () {
-                      Navigator.pop(dialogContext);
-                      unawaited(
-                        _readSavedMessages({
-                          'channel': 'all',
-                          'unread_only': false,
-                          'read_all': true,
-                        }),
-                      );
-                    },
-              child: const Text('Read all saved'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                try {
-                  await MessageNotificationService.openSettings();
-                } catch (_) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Could not open notification access settings.',
-                        ),
-                      ),
-                    );
-                  }
-                }
-              },
-              child: const Text('Open settings'),
-            ),
-          ],
         ),
       );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Message access is available on Android.'),
-          ),
-        );
-      }
+    } finally {
+      _settingsOpen = false;
+      if (mounted) setState(() {});
+    }
+    if (!mounted || _closingSession) return;
+    if (request != null) {
+      await _readSavedMessages(request.arguments, tool: request.tool);
+    } else {
+      await _startWakeWordIfIdle();
     }
   }
 
@@ -2280,12 +2283,12 @@ Complete the original request using the answer.
           ),
 
           IconButton(
-            tooltip: 'Message access',
-            onPressed: _showMessageAccess,
+            tooltip: 'Settings',
+            onPressed: _openSettings,
             icon: const Icon(
-              Icons.mark_chat_unread_outlined,
+              Icons.settings_outlined,
               color: Color(0xFF7D9FD9),
-              size: 22,
+              size: 21,
             ),
           ),
 
@@ -2400,7 +2403,7 @@ Complete the original request using the answer.
                     boxShadow: [
                       BoxShadow(
                         color: const Color(0xFF2F6BFF)
-                            .withOpacity(active ? .35 : .16),
+                            .withValues(alpha: active ? .35 : .16),
 
                         blurRadius: active ? 50 : 25,
 
@@ -2577,7 +2580,7 @@ Complete the original request using the answer.
 
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF2F6BFF).withOpacity(.08),
+            color: const Color(0xFF2F6BFF).withValues(alpha: .08),
 
             blurRadius: 30,
           ),
@@ -2636,6 +2639,11 @@ Complete the original request using the answer.
                         : () => unawaited(
                             _readSavedMessages(
                               _messageReadout!.replayArguments,
+                              tool: _messageReadout!.channel == 'gmail'
+                                  ? 'read_gmail'
+                                  : _messageReadout!.channel == 'maps'
+                                  ? 'get_driving_route'
+                                  : 'read_messages',
                             ),
                           ),
                   )
@@ -2760,7 +2768,7 @@ Complete the original request using the answer.
                     ? null
                     : [
                         BoxShadow(
-                          color: const Color(0xFF2F6BFF).withOpacity(.35),
+                          color: const Color(0xFF2F6BFF).withValues(alpha: .35),
                           blurRadius: 28,
                           spreadRadius: 3,
                         ),

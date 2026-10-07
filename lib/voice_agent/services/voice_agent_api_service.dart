@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/agent_response.dart';
+import '../tools/gmail_maps_commands.dart';
 
 class VoiceAgentApiService {
   static http.Client? _activeClient;
@@ -17,10 +18,17 @@ class VoiceAgentApiService {
   static Future<AgentResponse> executeCommand(
     String text, {
     List<Map<String, String>> history = const [],
+    String? commandText,
   }) async {
     final requestGeneration = ++_requestGeneration;
 
     _activeClient?.close();
+
+    final local = routeGmailMapsCommand(commandText ?? text);
+    if (local != null) {
+      _activeClient = null;
+      return local;
+    }
 
     final client = http.Client();
 

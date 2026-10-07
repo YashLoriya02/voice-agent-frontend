@@ -4,12 +4,10 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
-import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.FrameLayout
 
-/** Debug-only host for previewing the exact system assistant nudge in-app. */
+/** Settings preview of the same native surface used by the system assistant. */
 class AssistantPreviewActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -18,27 +16,13 @@ class AssistantPreviewActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         window.attributes = window.attributes.apply {
             dimAmount = 0.38f
-            gravity = Gravity.BOTTOM
         }
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
 
-        val root = FrameLayout(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            setPadding(dp(18), dp(18), dp(18), dp(34))
-            setOnClickListener { finish() }
-        }
-
-        root.addView(
-            HeyAgentNudgeView(this, previewMode = true),
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            ).apply {
-                bottomMargin = dp(14)
-            },
-        )
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val root = AssistantOverlayView(this, preview = true, onDismiss = { finish() })
+        root.setOnClickListener { finish() }
         setContentView(root)
     }
 
@@ -50,7 +34,4 @@ class AssistantPreviewActivity : Activity() {
         )
     }
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
 }

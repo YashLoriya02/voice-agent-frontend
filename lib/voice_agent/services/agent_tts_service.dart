@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:audio_stream_player/audio_stream_player.dart';
 import 'package:flutter/foundation.dart';

@@ -18,13 +18,17 @@ import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageButton
+import android.content.res.ColorStateList
+import android.text.TextUtils
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** Shared native assistant card used by both the real invocation and debug preview. */
+/** Shared native assistant card used by the real invocation and settings preview. */
 class HeyAgentNudgeView(
     context: Context,
     previewMode: Boolean = false,
+    onDismiss: (() -> Unit)? = null,
 ) : FrameLayout(context) {
 
     private val subtitleView: TextView
@@ -91,7 +95,7 @@ class HeyAgentNudgeView(
         }
 
         val eyebrow = TextView(context).apply {
-            text = "NEURAL VOICE INTERFACE"
+            text = "YOUR PERSONAL ASSISTANT"
             setTextColor(Color.rgb(112, 171, 255))
             textSize = 8f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -101,9 +105,11 @@ class HeyAgentNudgeView(
         val title = TextView(context).apply {
             text = "HEY AGENT"
             setTextColor(Color.WHITE)
-            textSize = 23f
+            textSize = 20f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            letterSpacing = 0.12f
+            letterSpacing = 0.08f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             includeFontPadding = false
         }
 
@@ -164,7 +170,16 @@ class HeyAgentNudgeView(
                 letterSpacing = 0.12f
             },
         )
-        mainRow.addView(livePill)
+        if (onDismiss != null) {
+            mainRow.addView(ImageButton(context).apply {
+                contentDescription = "Close assistant"
+                setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+                imageTintList = ColorStateList.valueOf(Color.rgb(133, 226, 255))
+                setBackgroundColor(Color.TRANSPARENT)
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                setOnClickListener { onDismiss() }
+            }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        }
         surface.addView(mainRow)
 
         val signalRow = LinearLayout(context).apply {
@@ -178,14 +193,17 @@ class HeyAgentNudgeView(
         )
 
         statusView = TextView(context).apply {
-            text = if (previewMode) "DEBUG PREVIEW  •  TAP TO CLOSE" else "VOICE LINK ACTIVE"
+            text = if (previewMode) "PREVIEW YOUR ASSISTANT" else "How can I help?"
             setTextColor(Color.rgb(91, 143, 197))
-            textSize = 8f
+            textSize = 10f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            letterSpacing = 0.13f
+            letterSpacing = 0.02f
             gravity = Gravity.END
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         }
 
+        signalRow.addView(livePill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6); marginEnd = dp(8) })
         signalRow.addView(
             statusView,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
@@ -210,32 +228,9 @@ class HeyAgentNudgeView(
     }
 }
 
-private class AgentCoreView(context: Context) : View(context) {
+private class AgentCoreView(context: Context) : AssistantAnimatedView(context, 1900L) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val arcBounds = RectF()
-    private var phase = 0f
-    private var animator: ValueAnimator? = null
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 1900L
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            addUpdateListener {
-                phase = it.animatedValue as Float
-                invalidate()
-            }
-            start()
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        animator?.cancel()
-        animator = null
-        super.onDetachedFromWindow()
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val cx = width / 2f
@@ -292,34 +287,11 @@ private class AgentCoreView(context: Context) : View(context) {
     }
 }
 
-private class ListeningWaveView(context: Context) : View(context) {
+private class ListeningWaveView(context: Context) : AssistantAnimatedView(context, 1150L) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(46, 225, 214)
         strokeCap = Paint.Cap.ROUND
     }
-    private var phase = 0f
-    private var animator: ValueAnimator? = null
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 1150L
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            addUpdateListener {
-                phase = it.animatedValue as Float
-                invalidate()
-            }
-            start()
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        animator?.cancel()
-        animator = null
-        super.onDetachedFromWindow()
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val barCount = 9
@@ -335,34 +307,34 @@ private class ListeningWaveView(context: Context) : View(context) {
     }
 }
 
-private class PulseDotView(context: Context) : View(context) {
+private class PulseDotView(context: Context) : AssistantAnimatedView(context, 900L, reverse = true) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var phase = 0f
-    private var animator: ValueAnimator? = null
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 900L
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            addUpdateListener {
-                phase = it.animatedValue as Float
-                invalidate()
-            }
-            start()
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        animator?.cancel()
-        animator = null
-        super.onDetachedFromWindow()
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         paint.color = Color.argb((130 + phase * 125).toInt(), 83, 230, 177)
         canvas.drawCircle(width / 2f, height / 2f, width * (.28f + phase * .18f), paint)
     }
+}
+
+/** Native animations stop with the window and honor Android reduced motion. */
+private abstract class AssistantAnimatedView(context: Context, private val period: Long, private val reverse: Boolean = false) : View(context) {
+    protected var phase = .5f
+    private var animator: ValueAnimator? = null
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); if (windowVisibility == VISIBLE) startAnimation() }
+    override fun onDetachedFromWindow() { stopAnimation(); super.onDetachedFromWindow() }
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE && isAttachedToWindow) startAnimation() else stopAnimation()
+    }
+    private fun startAnimation() {
+        if (animator != null || (android.os.Build.VERSION.SDK_INT >= 26 && !ValueAnimator.areAnimatorsEnabled())) return
+        animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = period; repeatCount = ValueAnimator.INFINITE
+            repeatMode = if (reverse) ValueAnimator.REVERSE else ValueAnimator.RESTART
+            interpolator = LinearInterpolator()
+            addUpdateListener { phase = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
+    private fun stopAnimation() { animator?.cancel(); animator = null }
 }

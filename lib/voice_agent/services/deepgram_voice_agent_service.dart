@@ -914,7 +914,11 @@ class DeepgramVoiceAgentService {
             onLocalReadout?.call(message);
           },
         );
-        if (name == 'read_messages' || name == 'check_messages') {
+        if (name == 'read_messages' ||
+            name == 'check_messages' ||
+            name == 'read_gmail' ||
+            name == 'check_gmail' ||
+            name == 'get_driving_route') {
           await Future<void>.delayed(const Duration(milliseconds: 250));
           setMicrophoneMuted(false);
         }
@@ -945,7 +949,11 @@ class DeepgramVoiceAgentService {
         });
         debugPrint('Function $name failed: $error');
       } finally {
-        if (name == 'read_messages' || name == 'check_messages') {
+        if (name == 'read_messages' ||
+            name == 'check_messages' ||
+            name == 'read_gmail' ||
+            name == 'check_gmail' ||
+            name == 'get_driving_route') {
           setMicrophoneMuted(false);
           onLocalReadoutFinished?.call();
         }
@@ -1292,6 +1300,9 @@ For read-more/repeat follow-ups, preserve the channel and sender from the most r
 For repeat, saved, already-read, or all-message requests, use read_all=true and unread_only=false. For all unread/new messages, use read_all=true and unread_only=true. Saved captured previews can be replayed even after notifications are dismissed, within the local cache retention window.
 
 GENERAL ASSISTANCE:
+Use read_gmail to read Gmail inbox sender, subject and previews privately on the phone (defaults to unread mail), and check_gmail for the actual unread inbox count. Mail is spoken with an offline phone voice; contents never appear in your function response. Do not invent or repeat emails. For repeating the last emails, use read_gmail with repeat_last=true; use unread_only=false to include already-read inbox mail. Reading aloud does not mark Gmail mail read.
+For last/latest email use limit=1 and unread_only=false unless the user explicitly says unread. Always use mail tools despite prior generic replies claiming email is unavailable; the phone reports actual access errors.
+Use get_driving_route for how far/how long a drive to a destination. It opens installed Google Maps using its own current-location origin: NEVER ask the user for their current location or coordinates. Distance/time questions open driving directions and read clearly displayed estimates privately on the phone. For Navigate to, Take me to, Drive to or Start navigation, set start_navigation=true. Never guess distance, time or coordinates. For Read the current Maps route use read_current=true. For a follow-up choosing a displayed route number use choice and read_current=true. Estimates are spoken locally; do not repeat them remotely.
 Answer general knowledge questions, definitions, jokes, casual conversation, explanations, and everyday requests directly.
 Keep answers voice-friendly and useful.
 ''';

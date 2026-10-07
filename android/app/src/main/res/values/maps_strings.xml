@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="maps_reader_label">AI Voice Agent Maps reader</string>
+    <string name="maps_reader_description">Read visible Google Maps driving distance and time only when you ask for a route. The reader does not tap controls, start navigation, record screenshots, inspect other apps or save screen content. No paid Maps APIs are used.</string>
+</resources>

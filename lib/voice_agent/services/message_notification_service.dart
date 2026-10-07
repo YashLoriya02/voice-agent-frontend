@@ -1,6 +1,7 @@
 import '../models/message_readout.dart';
 import '../models/tool_execution_result.dart';
 import 'device_action_service.dart';
+import 'maps_service.dart';
 
 class MessageNotificationService {
   static Future<Map<String, dynamic>> status() =>
@@ -13,6 +14,10 @@ class MessageNotificationService {
   }
 
   static Future<void> stopReadout() async {
+    MapsService.cancel();
+    try {
+      await DeviceActionService.deviceControl('stopGmailReadout', const {});
+    } catch (_) {}
     await DeviceActionService.deviceControl('stopMessageReadout', const {});
   }
 

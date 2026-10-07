@@ -27,6 +27,8 @@ open class MainActivity : FlutterActivity() {
 
     private val deviceControls by lazy { DeviceControls(this) }
     private val messageNotifications by lazy { MessageNotificationBridge(this) }
+    private val gmail by lazy { GmailBridge(this) }
+    private val installedMaps by lazy { InstalledMapsBridge(this) }
 
     companion object {
         private const val TAG = "HeyAgent/MainActivity"
@@ -89,6 +91,8 @@ open class MainActivity : FlutterActivity() {
 
             if (deviceControls.handle(call, result)) return@setMethodCallHandler
             if (messageNotifications.handle(call, result)) return@setMethodCallHandler
+            if (gmail.handle(call, result)) return@setMethodCallHandler
+            if (installedMaps.handle(call, result)) return@setMethodCallHandler
 
             try {
 
@@ -373,6 +377,14 @@ open class MainActivity : FlutterActivity() {
                             Intent(this, AssistantPreviewActivity::class.java),
                         )
                         result.success(true)
+                    }
+
+                    "updateAssistantUi" -> {
+                        AgentVoiceInteractionSession.updateActiveState(
+                            call.argument<String>("phase").orEmpty(),
+                            call.argument<String>("caption").orEmpty(),
+                        )
+                        result.success(null)
                     }
 
                     "consumePendingActivation" -> {
@@ -736,6 +748,7 @@ override fun onRequestPermissionsResult(
 
 override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
+    gmail.onActivityResult(requestCode, resultCode, data)
 
     if (requestCode == ASSISTANT_ROLE_REQUEST_CODE) {
         val selected = isAssistantRoleHeld()
@@ -1096,19 +1109,10 @@ private fun normalizeContactName(
         )
 }
 
-private fun normalizePhoneNumber(
-    phoneNumber: String
-): String {
-
-    return phoneNumber
-        .replace(" ", "")
-        .replace("-", "")
-        .replace("(", "")
-        .replace(")", "")
-}
-
 override fun onDestroy() {
-        messageNotifications.dispose()
+    installedMaps.dispose()
+    gmail.dispose()
+    messageNotifications.dispose()
     deviceControls.dispose()
     wakeWordChannel?.setMethodCallHandler(null)
     wakeWordChannel = null
