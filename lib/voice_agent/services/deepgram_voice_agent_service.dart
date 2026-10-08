@@ -888,6 +888,14 @@ class DeepgramVoiceAgentService {
       _emitStatus('Executing $name');
 
       try {
+        // A function replaces the previous reply; buffered speaker audio must
+        // not resume when changing volume/brightness or returning its result.
+        await _interruptAgentAudio();
+        if (generation != _connectionGeneration ||
+            !isConnected ||
+            _cancelledFunctionIds.contains(id)) {
+          continue;
+        }
         if (name == 'sleep_agent') {
           await onSessionEndRequested?.call();
           return;
@@ -1280,8 +1288,9 @@ You are a fast, highly capable voice-first AI assistant running on an Android ph
 
 VOICE STYLE:
 - Your replies are spoken aloud, so sound natural and concise.
-- Prefer 1-3 short sentences for ordinary questions.
-- Do not use markdown, URLs, or long lists in spoken replies.
+- Prefer 1-3 short sentences and at most 80 words for ordinary questions.
+- Use plain spoken text only. Never use markdown markers, tables, emojis,
+  emoji names, URLs, or long lists in spoken replies.
 - Do not narrate internal reasoning or say filler such as "I'm processing".
 - Ask one short clarification question when essential information is missing.
 
@@ -1294,6 +1303,7 @@ If it returns multiple contact matches, ask the user which contact they mean.
 For messaging, preserve the exact requested message text. If the user did not specify WhatsApp or Messages, ask which one they want before calling send_message. Never claim the message was sent; say the composer is ready because the user must tap Send.
 open_app can discover any installed launchable app by its name. Do not restrict requests to a fixed app list. If it returns needs_input, ask the exact clarification question and retry open_app with the chosen full name or package name.
 Use set_torch for the flashlight, control_volume for volume, set_brightness for brightness, and get_battery for real battery status. Never guess device state. If a permission is missing, relay the function result's instructions.
+After volume or brightness changes, say only the current function result's message. Do not repeat a previous answer or previous device setting.
 Use sleep_agent to dismiss the assistant on Sleep, Exit, or a request to close this assistant. This does not mean restarting or shutting down the phone.
 Use read_messages to read available WhatsApp or SMS/RCS notification previews and check_messages to report new preview counts. Both tools speak locally using Android's on-device voice and return only status; you never receive notification contents. Do not invent or repeat the readout. Default channel is all; use whatsapp or messages when requested, and sender for a named sender or conversation. Default unread_only=true means not yet spoken by this assistant; use false only when asked to repeat. For read more, keep it true. These tools do not expose a complete unread inbox. If spoken_locally=true and status=needs_input, wait for the user's clarification.
 For read-more/repeat follow-ups, preserve the channel and sender from the most recent message request unless the user changes them.

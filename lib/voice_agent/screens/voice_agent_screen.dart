@@ -15,6 +15,7 @@ import '../tools/gmail_maps_commands.dart';
 import '../tools/private_readout_guard.dart';
 
 import '../services/agent_tts_service.dart';
+import '../services/speech_text.dart';
 import '../services/deepgram_service.dart';
 import '../services/device_action_service.dart';
 import '../services/message_notification_service.dart';
@@ -193,6 +194,21 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
           'Deepgram function: '
           '$name $arguments',
         );
+        if (!mounted ||
+            _closingSession ||
+            _provider != AgentProvider.deepgramVoiceAgent) {
+          return;
+        }
+        _deepgramResponseGeneration++;
+        _deepgramSpeechFallbackTimer?.cancel();
+        _deepgramNativeAudioStarted = false;
+        _deepgramFallbackSpokenText = '';
+        _deepgramFallbackPending = false;
+        unawaited(_tts.stop());
+        setState(() {
+          _agentMessage = null;
+          _messageReadout = null;
+        });
       },
 
       onLatencyReport: (report) {
@@ -304,6 +320,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       _deepgramFallbackPending = false;
       _deepgramSpeechFallbackTimer?.cancel();
       unawaited(_tts.stop());
+      if (_messageReadout == null) _agentMessage = null;
     }
 
     setState(() {
@@ -504,7 +521,12 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
       // The fallback also plays through the phone speaker, so hold the
       // microphone upload until playback and its brief echo tail are over.
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      _deepgramVoiceAgent.setMicrophoneMuted(false);
+      if (mounted &&
+          generation == _deepgramResponseGeneration &&
+          _provider == AgentProvider.deepgramVoiceAgent &&
+          !_localReadoutInProgress) {
+        _deepgramVoiceAgent.setMicrophoneMuted(false);
+      }
 
       if (_deepgramFallbackSpeakingGeneration == generation) {
         _deepgramFallbackSpeakingGeneration = null;
@@ -1843,12 +1865,13 @@ Complete the original request using the answer.
     if (!mounted) return;
 
     final speechGeneration = ++_speechGeneration;
+    final spokenMessage = SpeechText.clean(message);
 
     setState(() {
       _messageReadout = null;
       _state = VoiceUiState.speaking;
 
-      _agentMessage = message;
+      _agentMessage = spokenMessage;
     });
 
     /*
@@ -1863,9 +1886,14 @@ Complete the original request using the answer.
      * - contact selection questions
      */
     try {
-      await _tts.speakAndWait(message);
+      await _tts.speakAndWait(spokenMessage);
     } catch (e) {
       debugPrint('TTS error: $e');
+      if (mounted && speechGeneration == _speechGeneration) {
+        setState(() {
+          _agentMessage = '$spokenMessage\n\nSpeech could not finish. The full response is available here.';
+        });
+      }
     }
 
     if (!mounted || speechGeneration != _speechGeneration) return;

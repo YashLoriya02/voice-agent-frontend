@@ -31,7 +31,11 @@ class LocalMessageSpeech(private val context: Context) {
             return
         }
         pending = done
-        text = readout
+        text = SpokenText.clean(readout)
+        if (text.isEmpty()) {
+            finish(true, "No spoken text in this readout.")
+            return
+        }
         timeout = Runnable { finish(false, "Message reading timed out. Please try again.") }
             .also { handler.postDelayed(it, 120_000) }
         if (engine == null) {

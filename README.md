@@ -33,6 +33,10 @@ A Deepgram Voice Agent connection handles speech recognition, conversation and s
 
 The preferred voice option and wake setting are saved on Android. The home screen and Settings both expose voice selection.
 
+Custom mode's backend can switch Groq models on rate-limit/temporary failures while keeping the app's response format unchanged. The backend's `POST /groq/test` checks individual models or simulates a primary-model limit with `{"error":true}`. Its setup and request options are documented in the backend README.
+
+Custom TTS strips markdown markers and emojis and splits long replies into bounded synthesis requests without dropping their text. Playback waits for the speaker to drain rather than stopping after a fixed 30 seconds. A new response cancels older speech. Private mail/message cleanup stays on the phone; Deepgram Voice Agent is instructed to use plain spoken replies and clears prior audio before new device actions.
+
 ## Settings and assistant interface
 
 Open the gear icon on the home screen to access **Settings**:
@@ -111,6 +115,7 @@ ENABLE_WEB_SEARCH=false
 | --- | --- |
 | `GROQ_API_KEY` | Custom mode's command routing, conversational answers and enabled web search. |
 | `DEEPGRAM_API_KEY` | Backend generation of temporary Deepgram tokens and Custom mode's streamed TTS. |
+| `GROQ_MODELS` | Optional backend-only comma-separated fallback order: GPT-OSS 20B, GPT-OSS 120B, Qwen 3.8 27B by default. |
 | `ENABLE_WEB_SEARCH` | Optional. The literal value `false` disables live web search; it is enabled when unset. |
 | `VOICE_AGENT_API_URL` | Optional Flutter build define for the backend URL. Defaults to `https://voice-ai-agent-server.vercel.app`. |
 
