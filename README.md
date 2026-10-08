@@ -48,7 +48,7 @@ Open the gear icon on the home screen to access **Settings**:
 
 The page refreshes access status when returning from Android settings. Connection failures are shown inline. App setup uses a full page; Google consent and Android permission selection remain native system interfaces.
 
-The native Hey Agent panel displays listening, thinking, speaking and action states. A blue/cyan glow traces the screen perimeter, with completion/error colors. The glow is decorative: touches outside the assistant panel remain available to the app underneath. Native animations stop when hidden and honor Android's disabled-animation setting.
+The native Hey Agent panel displays listening, thinking, speaking and action states over a dimmed screen. Soft blue, red, green and amber light moves around the edges, with a rotating multicolor perimeter and a halo behind the card. The glow is decorative: touches outside the assistant panel remain available to the app underneath. The same surface is available in Settings preview. Native animations stop when hidden and honor Android's disabled-animation setting.
 
 ## Technology
 

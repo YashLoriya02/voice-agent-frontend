@@ -44,9 +44,11 @@ class HeyAgentNudgeView(
         background = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(
-                Color.rgb(61, 128, 255),
-                Color.rgb(27, 235, 224),
-                Color.rgb(49, 88, 232),
+                Color.rgb(55, 125, 255),
+                Color.rgb(255, 86, 112),
+                Color.rgb(255, 208, 100),
+                Color.rgb(66, 232, 171),
+                Color.rgb(55, 125, 255),
             ),
         ).apply {
             cornerRadius = dp(30).toFloat()
@@ -60,8 +62,8 @@ class HeyAgentNudgeView(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(
                     Color.rgb(5, 10, 24),
-                    Color.rgb(6, 28, 60),
-                    Color.rgb(5, 67, 112),
+                    Color.rgb(7, 18, 38),
+                    Color.rgb(7, 33, 55),
                 ),
             ).apply {
                 cornerRadius = dp(28).toFloat()
@@ -194,7 +196,7 @@ class HeyAgentNudgeView(
 
         statusView = TextView(context).apply {
             text = if (previewMode) "PREVIEW YOUR ASSISTANT" else "How can I help?"
-            setTextColor(Color.rgb(91, 143, 197))
+            setTextColor(Color.rgb(158, 188, 217))
             textSize = 10f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             letterSpacing = 0.02f

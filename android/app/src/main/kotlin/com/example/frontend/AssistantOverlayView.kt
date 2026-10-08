@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.os.Build
 import android.view.Gravity
@@ -16,6 +18,7 @@ import android.view.WindowInsets
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 
 /** Trusted assistant-session surface. Only the panel is touchable, not the glow. */
@@ -60,19 +63,34 @@ class AssistantOverlayView(context: Context, preview: Boolean = false, onDismiss
 
 private class AssistantEdgeGlowView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val atmospherePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bounds = RectF()
     private val matrix = Matrix()
     private var shader: SweepGradient? = null
     private var animator: ValueAnimator? = null
-    private var phase = 0f
+    private var phase = .15f
     private var active = true
     private var state = "listening"
+    private val blue = Color.rgb(55, 125, 255)
+    private val red = Color.rgb(255, 86, 112)
+    private val green = Color.rgb(66, 232, 171)
+    private val yellow = Color.rgb(255, 208, 100)
+    private val clouds = intArrayOf(blue, red, green, yellow).map { color ->
+        RadialGradient(0f, 0f, 1f,
+            intArrayOf(withAlpha(color, 170), withAlpha(color, 100), withAlpha(color, 28), withAlpha(color, 0)),
+            floatArrayOf(0f, .22f, .6f, 1f), Shader.TileMode.CLAMP)
+    }
     var cornerRadius = 30f * resources.displayMetrics.density
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         isClickable = false; isFocusable = false
     }
-    fun updatePhase(value: String) { state = value; createShader(); invalidate() }
+    fun updatePhase(value: String) {
+        if (state == value) return
+        state = value
+        createShader()
+        invalidate()
+    }
     fun setActive(value: Boolean) {
         active = value
         if (value && isAttachedToWindow && windowVisibility == VISIBLE) start() else stop()
@@ -86,28 +104,68 @@ private class AssistantEdgeGlowView(context: Context) : View(context) {
     private fun start() {
         if (animator != null || (Build.VERSION.SDK_INT >= 26 && !ValueAnimator.areAnimatorsEnabled())) return
         animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 4200; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
-            addUpdateListener { phase = it.animatedValue as Float; invalidate() }
+            duration = 12000; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
+            addUpdateListener { phase = it.animatedValue as Float; postInvalidateOnAnimation() }
             start()
         }
     }
     private fun stop() { animator?.cancel(); animator = null }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { createShader() }
     private fun createShader() {
-        val highlight = when (state) { "success" -> Color.rgb(83, 230, 177); "error" -> Color.rgb(255, 135, 150); else -> Color.rgb(0, 200, 255) }
-        shader = SweepGradient(width / 2f, height / 2f, intArrayOf(Color.rgb(47, 107, 255), highlight, Color.argb(50, 47, 107, 255), Color.rgb(47, 107, 255)), floatArrayOf(0f, .35f, .7f, 1f))
+        val highlight = when (state) { "success" -> green; "error" -> red; else -> Color.rgb(101, 227, 255) }
+        shader = SweepGradient(width / 2f, height / 2f,
+            intArrayOf(blue, red, yellow, green, highlight, blue),
+            floatArrayOf(0f, .2f, .4f, .6f, .82f, 1f))
     }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // Dim the actual underlying screen. Drawing the scrim here makes the
+        // preview and trusted voice session identical, with no extra overlay
+        // permission, screenshots, or dependence on cross-window blur support.
+        canvas.drawColor(Color.argb(132, 2, 5, 12))
+        val orbit = phase * PI.toFloat() * 2f
+        val breathing = (sin(orbit * 2f) + 1f) / 2f
+        val energy = when (state) {
+            "listening", "speaking" -> 1f
+            "thinking", "executing" -> .9f
+            else -> .75f
+        }
+        // Soft radial falloff provides a blurred-light appearance using cached
+        // GPU shaders. The asymmetrical fields move slowly around the edges,
+        // leaving the center and the assistant's text clear.
+        cloud(canvas, 0, width * (.04f + .07f * sin(orbit)), height * (.25f + .08f * cos(orbit)), width * .66f, height * .37f, energy)
+        cloud(canvas, 1, width * (.96f - .06f * cos(orbit)), height * (.1f + .06f * sin(orbit)), width * .61f, height * .28f, energy)
+        cloud(canvas, 2, width * (.18f + .07f * cos(orbit)), height * (.97f - .07f * sin(orbit)), width * .75f, height * .31f, energy)
+        cloud(canvas, 3, width * (.98f - .05f * sin(orbit)), height * (.74f + .06f * cos(orbit)), width * .57f, height * .33f, energy)
+        // A wider blue/green halo links the floating card to the screen field.
+        cloud(canvas, if (state == "success") 2 else 0, width * .52f, height * .94f,
+            width * .65f, height * (.2f + .025f * breathing), .55f)
         val density = resources.displayMetrics.density
         val inset = 5f * density
         bounds.set(inset, inset, width - inset, height - inset)
         matrix.setRotate(phase * 360f, width / 2f, height / 2f)
         shader?.setLocalMatrix(matrix); paint.shader = shader
-        val pulse = (sin(phase * 2 * PI).toFloat() + 1f) / 2f
-        for ((stroke, alpha) in listOf(12f to 20, 6f to 45, 2f to (170 + pulse * 75).toInt())) {
-            paint.strokeWidth = stroke * density; paint.alpha = alpha
-            canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, paint)
-        }
+        // Wide translucent layers blend into the aurora; the narrow light trace
+        // retains the recognizable full-device assistant outline.
+        edge(canvas, density, 30f, 12)
+        edge(canvas, density, 16f, 22)
+        edge(canvas, density, 7f, 46)
+        edge(canvas, density, 1.8f, (165 + breathing * 65).toInt())
     }
+    private fun cloud(canvas: Canvas, index: Int, x: Float, y: Float, rx: Float, ry: Float, intensity: Float) {
+        if (rx <= 0f || ry <= 0f) return
+        atmospherePaint.shader = clouds[index]
+        atmospherePaint.alpha = (205 * intensity).toInt()
+        canvas.save()
+        canvas.translate(x, y)
+        canvas.scale(rx, ry)
+        canvas.drawCircle(0f, 0f, 1f, atmospherePaint)
+        canvas.restore()
+    }
+    private fun edge(canvas: Canvas, density: Float, stroke: Float, alpha: Int) {
+        paint.strokeWidth = stroke * density
+        paint.alpha = alpha
+        canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, paint)
+    }
+    private fun withAlpha(color: Int, alpha: Int) = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 }

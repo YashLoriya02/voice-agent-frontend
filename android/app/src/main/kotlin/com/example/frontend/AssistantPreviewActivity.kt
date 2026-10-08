@@ -13,10 +13,8 @@ class AssistantPreviewActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        window.attributes = window.attributes.apply {
-            dimAmount = 0.38f
-        }
+        // The shared assistant surface draws its own dimmed, animated backdrop.
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
 

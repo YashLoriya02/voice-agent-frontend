@@ -73,6 +73,7 @@ class InstalledMapsBridge(private val activity: Activity) {
     private fun openDirections(destination: String, startNavigation: Boolean = false): Boolean = try {
         val uri = Uri.parse(InstalledMapsRequest.url(destination, startNavigation))
         activity.startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage(MapsRouteReaderService.MAPS_PACKAGE))
+        (activity as? MainActivity)?.dismissAssistantAfterAppLaunch()
         true
     } catch (_: Exception) { false }
     private fun installed(): Boolean = try {

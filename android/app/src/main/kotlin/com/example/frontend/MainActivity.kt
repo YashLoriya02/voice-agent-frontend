@@ -70,6 +70,16 @@ open class MainActivity : FlutterActivity() {
         })
     }
 
+    internal fun dismissAssistantAfterAppLaunch() {
+        if (this !is AssistantHostActivity) return
+        // Let the launch/tool result complete before gracefully stopping the
+        // background voice engine. Only finish this host, leaving the app open.
+        assistantCloseHandler.post {
+            AgentVoiceInteractionSession.dismissActiveSession()
+            requestAssistantHostDismissal()
+        }
+    }
+
     private val wakeWordListener: (String, Map<String, Any?>) -> Unit =
         { method, arguments ->
             // The selected VoiceInteractionService owns the wake experience.
@@ -526,6 +536,8 @@ open class MainActivity : FlutterActivity() {
 
         startActivity(launchIntent)
 
+        if (packageName != this.packageName) dismissAssistantAfterAppLaunch()
+
         return true
     }
 
@@ -541,6 +553,7 @@ open class MainActivity : FlutterActivity() {
         for (packageName in packageNames.distinct()) {
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             if (launchIntent != null && tryStartActivity(launchIntent)) {
+                if (packageName != this.packageName) dismissAssistantAfterAppLaunch()
                 return true
             }
         }
@@ -585,7 +598,9 @@ open class MainActivity : FlutterActivity() {
             else -> emptyList()
         }
 
-        return fallbackIntents.any(::tryStartActivity)
+        val opened = fallbackIntents.any(::tryStartActivity)
+        if (opened) dismissAssistantAfterAppLaunch()
+        return opened
     }
 
     private fun openVisibleAgentApp() {
